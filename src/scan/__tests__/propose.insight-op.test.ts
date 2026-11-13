@@ -217,7 +217,7 @@ describe('proposeInsightOps', () => {
       targetUpdatedAt: '2026-08-27T10:00:00.000Z',
       retrieval: { k: 3, neighborIds: [TARGET], distances: [0.05] },
     });
-    const res = await proposeInsightOps({ ops: [noop], reviewer, syncRunId: SYNC_RUN });
+    const res = await proposeInsightOps({ ops: [noop], reviewer, driveSyncRunId: SYNC_RUN });
     expect(res).toEqual({ emitted: 0, duplicatesSkipped: 0, noops: 1 });
     expect(F.state.created).toHaveLength(0);
     expect(embedTexts).not.toHaveBeenCalled(); // nothing to embed
@@ -226,7 +226,7 @@ describe('proposeInsightOps', () => {
   it('emits a proposal row with run provenance, reviewer, TTL and one batch embed call', async () => {
     const ops = [makeOp(), makeUpdateOp()];
     const before = Date.now();
-    const res = await proposeInsightOps({ ops, reviewer, syncRunId: SYNC_RUN });
+    const res = await proposeInsightOps({ ops, reviewer, driveSyncRunId: SYNC_RUN });
 
     expect(res).toEqual({ emitted: 2, duplicatesSkipped: 0, noops: 0 });
     expect(embedTexts).toHaveBeenCalledTimes(1); // one call for the batch
@@ -239,10 +239,12 @@ describe('proposeInsightOps', () => {
     expect(row).toMatchObject({
       kind: 'insight_op',
       state: 'pending',
-      syncRunId: SYNC_RUN, // attached at emit — not on the op (D3 contract)
+      driveSyncRunId: SYNC_RUN, // attached at emit — not on the op (D3 contract)
       reviewerEmail: 'owner@example.test',
       reviewerStaffId: 'staff-1',
     });
+    // sync_run_id references v1 sync_runs; a queue run id there is a 23503.
+    expect(row).not.toHaveProperty('syncRunId');
     expect((row.confidence as Prisma.Decimal).toNumber()).toBeCloseTo(0.9);
     expect(row.reviewToken).toMatch(/^[0-9a-f]{64}$/);
     const expires = (row.expiresAt as Date).getTime();
@@ -258,7 +260,7 @@ describe('proposeInsightOps', () => {
   it('skips an op with an identical pending card, keyed on (entity, op-hash)', async () => {
     F.state.pendingMatch = { id: 'already-pending' };
     const op = makeOp();
-    const res = await proposeInsightOps({ ops: [op], reviewer, syncRunId: SYNC_RUN });
+    const res = await proposeInsightOps({ ops: [op], reviewer, driveSyncRunId: SYNC_RUN });
 
     expect(res).toEqual({ emitted: 0, duplicatesSkipped: 1, noops: 0 });
     expect(F.state.created).toHaveLength(0);
@@ -277,7 +279,7 @@ describe('proposeInsightOps', () => {
     const res = await proposeInsightOps({
       ops: [makeOp()],
       reviewer,
-      syncRunId: SYNC_RUN,
+      driveSyncRunId: SYNC_RUN,
       embed: async () => {
         throw new Error('embedding quota exhausted');
       },

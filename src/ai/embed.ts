@@ -20,7 +20,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { config } from '../config';
 import { logger } from '../logger';
-import { isRetryable } from './gemini.client';
+import { isRetryableLlmError } from './retryable';
 
 export const EMBEDDING_MODEL = 'gemini-embedding-001';
 export const EMBEDDING_DIM = 1536;
@@ -59,9 +59,11 @@ class GeminiEmbeddingDriver implements EmbeddingDriver {
   private client: GoogleGenAI;
 
   constructor(init: { project: string; location: string } | { apiKey: string }) {
-    // Same construction as GeminiLlmDriver: our loop owns retries, so the
-    // SDK's built-in retry is pinned off to keep backoff deterministic.
-    const httpOptions = { retryOptions: { attempts: 1 } };
+    // Same construction as GeminiLlmDriver: our loop owns retries, and NO
+    // retryOptions — with them set the SDK throws a plain Error for 429/5xx
+    // instead of a typed ApiError, which isRetryableLlmError cannot classify
+    // (see gemini.client.ts).
+    const httpOptions = {};
     if ('project' in init) {
       this.name = 'gemini-enterprise';
       this.client = new GoogleGenAI({
@@ -115,9 +117,9 @@ class GeminiEmbeddingDriver implements EmbeddingDriver {
         });
       } catch (err) {
         lastErr = err;
-        // Our own shape errors above never match isRetryable's patterns —
+        // Our own shape errors above never match isRetryableLlmError —
         // only transport and API-level transient failures retry.
-        const retryable = isRetryable(err);
+        const retryable = isRetryableLlmError(err);
         const willRetry = retryable && attempt < MAX_ATTEMPTS;
         logger.debug(
           { err, model: EMBEDDING_MODEL, batch: chunk.length, attempt, retryable, willRetry },

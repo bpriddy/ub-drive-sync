@@ -13,8 +13,11 @@
  * never a continuation chain.
  */
 
+import { config } from '../config';
 import { prisma } from '../prisma';
 import { getFileMetadata } from '../drive/client';
+import { contentMarkers } from '../drive/file-markers';
+import { isOutsideFolderMap } from '../drive/folder-tree';
 import { notifyReviewers } from '../drive/notify';
 import type { TraversedFile } from '../drive/types';
 import { summarizeError } from '../progress';
@@ -22,12 +25,13 @@ import { loadEntity } from '../backfill/entity';
 import { DEFAULT_CONCURRENCY, type Args, type BackfillRunResult } from '../backfill/args';
 import { resolveAccountStructure } from '../backfill/structure-stage';
 import { processBatch } from '../scan/process-batch';
+import { gateCutoff } from '../scan/content-gate';
+import { isTransientFailure } from '../scan/failure-class';
 import { log, rule, fmtMs, getLogCapture, setLogCapture } from '../scan/output';
 import { resetPhaseTimer, printPhaseSummary, timed } from '../scan/timing';
 import { queryActivityWindow, foldEvents, ymdUtc } from './activity';
 import { resolveActors } from './people';
 import { writeRunEditStats } from './stats';
-import { config } from '../config';
 import { reconcileCandidates } from '../drive/insight-reconcile';
 import { proposeInsightOps } from '../scan/propose';
 
@@ -37,7 +41,8 @@ const OVERLAP_MS = 2 * 60 * 1000;
 export interface ForwardArgs {
   accountId: string;
   /** The drive_sync_runs row driving this run — stats key their
-   *  contribution to it (run framing; retries replace themselves). */
+   *  contribution to it (run framing; retries replace themselves), and the
+   *  snapshot and proposal rows the scan writes carry it as drive_sync_run_id. */
   syncRunId: string;
   captureLog?: string[];
 }
@@ -45,8 +50,15 @@ export interface ForwardArgs {
 export async function runForward(fargs: ForwardArgs): Promise<BackfillRunResult> {
   const prevCapture = getLogCapture();
   if (fargs.captureLog) setLogCapture(fargs.captureLog);
+  const startedAt = Date.now();
   try {
     return await runForwardInner(fargs);
+  } catch (err) {
+    // The success path prints the run summary itself. A failed run, whose
+    // window repeats because the cursor is held, needs its token totals
+    // (and its MAX_TOKENS count) most.
+    printPhaseSummary(Date.now() - startedAt);
+    throw err;
   } finally {
     setLogCapture(prevCapture);
   }
@@ -156,27 +168,49 @@ async function runForwardInner(fargs: ForwardArgs): Promise<BackfillRunResult> {
   // Current metadata for the changed files. Vanished files (deleted
   // after the window) skip; folders never scan.
   //
-  // A file we can't fetch is LOST, not fatal: getFileMetadata has already
-  // spent the effort (the limiter retries rate limits, withTransientRetry
-  // retries 5xx + dropped sockets), so anything still failing here has had
-  // its chance. Dropping one file matches how processBatch treats a file
-  // that fails extraction — count it, log it, keep the run alive. Failing
-  // the run instead would stall the account indefinitely: the cursor lives
-  // on the account, so every later run would re-enter the same window,
-  // hit the same file, and die again, with nothing watching to notice.
+  // getFileMetadata has already spent the effort (the limiter retries rate
+  // limits, withTransientRetry retries 5xx + dropped sockets). What still
+  // fails splits by class:
+  //   - TRANSIENT (rate limit, 5xx, timeout, connection): the run fails
+  //     before any LLM spend and the cursor holds — the queue retry re-runs
+  //     the window minutes later, when the same fetch very likely works.
+  //     Advancing past it would lose the file's changes for good.
+  //   - PERMANENT (permission and other 4xx): the file is LOST, not fatal —
+  //     matching how processBatch treats a file that fails extraction.
+  //     Failing the run on it would stall the account indefinitely: the
+  //     cursor lives on the account, so every later run would re-enter the
+  //     same window, hit the same file, and die again.
   //
   // The count rides the final summary line, which survives the 40-line
   // log_summary tail clip — otherwise a run that silently dropped a dozen
   // files reads exactly like a clean one.
   const files: TraversedFile[] = [];
   let filesUnfetchable = 0;
+  let metadataTransient = 0;
+  // Changed files whose parent is neither the root nor a folder in this
+  // run's freshly gathered map: moved out of the tree, or under a parent the
+  // bot cannot see. Counted and logged only — they are still scanned and
+  // attributed to the account exactly as before (no tombstone yet).
+  let outsideFolderMap = 0;
   for (const id of changedIds) {
     let meta;
     try {
       meta = await timed('file_metadata', () => getFileMetadata(id));
     } catch (err) {
+      if (isTransientFailure(err)) {
+        // Stop at the first one: the window re-runs regardless, and each
+        // further stuck fetch would only add its full retry budget (minutes)
+        // to a run that is already going to fail.
+        metadataTransient++;
+        log(
+          `    ⚠ metadata fetch failed for ${id} after retries (transient): ${summarizeError(err)} — the window will be re-run`,
+        );
+        break;
+      }
       filesUnfetchable++;
-      log(`    ⚠ metadata unreadable for ${id} after retries: ${summarizeError(err)} — file dropped from this window`);
+      log(
+        `    ⚠ metadata unreadable for ${id} after retries: ${summarizeError(err)} — file dropped from this window`,
+      );
       continue;
     }
     if (!meta?.id || !meta.name) {
@@ -185,6 +219,7 @@ async function runForwardInner(fargs: ForwardArgs): Promise<BackfillRunResult> {
     }
     if (meta.mimeType === 'application/vnd.google-apps.folder') continue;
     const parentId = meta.parents?.[0] ?? null;
+    if (isOutsideFolderMap(parentId, ctx.folderId, structure.folderPathById)) outsideFolderMap++;
     const parentPath = (parentId && structure.folderPathById.get(parentId)) || ctx.name;
     files.push({
       id: meta.id,
@@ -205,12 +240,46 @@ async function runForwardInner(fargs: ForwardArgs): Promise<BackfillRunResult> {
             },
           }
         : {}),
+      ...contentMarkers(meta),
     });
+  }
+  if (outsideFolderMap > 0) {
+    log(
+      `  Parent map: out_of_scope=${outsideFolderMap} changed file(s) outside the folder map (moved out of the tree, or parent not visible)`,
+    );
+  }
+
+  if (metadataTransient > 0) {
+    throw new Error(
+      `${metadataTransient} transient metadata failure(s) — cursor NOT advanced; retry re-runs this window`,
+    );
   }
 
   let filesProcessed = 0;
   let scansProcessed = 0;
+  let filesUnchanged = 0;
   if (files.length > 0) {
+    // Unchanged-content gate (SKIP_UNCHANGED_CONTENT=on). It trusts only the
+    // snapshot rows written up to the account's last completed run (less a
+    // clock-skew margin): a retried window's failed attempt wrote rows whose
+    // observations may never have landed. No completed run yet, or a failed
+    // read: every file is interpreted, as with the flag off.
+    let unchangedGate: { notAfter: Date } | null = null;
+    if (config.SKIP_UNCHANGED_CONTENT === 'on') {
+      try {
+        const notAfter = await gateCutoff(fargs.accountId);
+        if (notAfter) {
+          unchangedGate = { notAfter };
+          log(`  ⏭ unchanged-content gate on — compared with rows up to ${notAfter.toISOString()}`);
+        } else {
+          log('  ⏭ unchanged-content gate on — no completed run yet, every file is interpreted');
+        }
+      } catch (err) {
+        log(
+          `  ⚠ unchanged-content cutoff unreadable (${summarizeError(err)}) — every file is interpreted`,
+        );
+      }
+    }
     const outcome = await processBatch(files, {
       ctx,
       attributor: structure.attributor,
@@ -221,12 +290,31 @@ async function runForwardInner(fargs: ForwardArgs): Promise<BackfillRunResult> {
       application: 'propose',
       editedAt: scanDate,
       concurrency: DEFAULT_CONCURRENCY,
+      unchangedGate,
+      driveSyncRunId: fargs.syncRunId,
     });
+    filesUnchanged = outcome.filesUnchanged;
     // Window-commit gate: don't advance the cursor unless every entity's
-    // proposals landed — the queue retry re-runs the identical window.
-    if (outcome.stage3Failures > 0) {
+    // proposals landed (stage 3, failed distills included) and no file's
+    // observations were lost to a transient error — the queue retry
+    // re-runs the identical window.
+    if (outcome.stage3Failures > 0 || outcome.transientFileErrors > 0) {
+      const causes = [
+        ...(outcome.stage3Failures > 0 ? [`${outcome.stage3Failures} stage-3 failure(s)`] : []),
+        ...(outcome.transientFileErrors > 0
+          ? [`${outcome.transientFileErrors} transient file error(s)`]
+          : []),
+      ];
+      throw new Error(`${causes.join(' + ')} — cursor NOT advanced; retry re-runs this window`);
+    }
+    // A snapshot row that failed to write leaves its file stale in the Drive
+    // name index. The retry re-runs the identical window and writes its rows
+    // again — history is append-only, so every failed attempt leaves one more
+    // row per file (up to the queue's attempts, and again on later runs while
+    // the cursor is held); readers take the latest.
+    if (outcome.snapshotWriteFailures > config.SNAPSHOT_WRITE_FAILURE_LIMIT) {
       throw new Error(
-        `${outcome.stage3Failures} stage-3 failure(s) — cursor NOT advanced; retry re-runs this window`,
+        `${outcome.snapshotWriteFailures} snapshot write failure(s) (SNAPSHOT_WRITE_FAILURE_LIMIT=${config.SNAPSHOT_WRITE_FAILURE_LIMIT}) — cursor NOT advanced; retry re-runs this window`,
       );
     }
 
@@ -251,7 +339,7 @@ async function runForwardInner(fargs: ForwardArgs): Promise<BackfillRunResult> {
             reviewerEmail: ctx.reviewerEmail ?? null,
             reviewerStaffId: ctx.reviewerStaffId ?? null,
           },
-          syncRunId: fargs.syncRunId,
+          driveSyncRunId: fargs.syncRunId,
         });
         log(
           `  ◆ insight ops: ${res.emitted} proposed, ${res.duplicatesSkipped} already pending, ${res.noops} NOOP — from ${outcome.candidates.length} candidate(s)`,
@@ -296,6 +384,9 @@ async function runForwardInner(fargs: ForwardArgs): Promise<BackfillRunResult> {
     log(
       `  ⚠ ${filesUnfetchable} file(s) dropped — metadata unreadable after retries; their changes are not in this scan`,
     );
+  }
+  if (filesUnchanged > 0) {
+    log(`  ⏭ ${filesUnchanged} file(s) unchanged since their last interpret — model calls skipped`);
   }
   log(
     rule(

@@ -91,7 +91,11 @@ describe('reconcileCandidate — verb mapping', () => {
 
   it('maps UPDATE with target, stale snapshot, and merged text', async () => {
     const op = await reconcileCandidate(candidate(), NEIGHBORS, {
-      runPresetFn: presetReturning({ op: 'UPDATE', target_id: NEIGHBOR_1, new_text: 'merged text' }),
+      runPresetFn: presetReturning({
+        op: 'UPDATE',
+        target_id: NEIGHBOR_1,
+        new_text: 'merged text',
+      }),
     });
     expect(op.op).toBe('UPDATE');
     expect(op.targetInsightId).toBe(NEIGHBOR_1);
@@ -134,12 +138,36 @@ describe('reconcileCandidate — verb mapping', () => {
     expect(call.variables.neighbors_json).toContain('Launch is planned for May.');
   });
 
-  it('rejects a malformed LLM op value', async () => {
+  it('degrades a malformed LLM op value to ADD and warns', async () => {
+    const warn = vi.fn();
+    const op = await reconcileCandidate(candidate(), NEIGHBORS, {
+      runPresetFn: presetReturning({ op: 'MERGE', target_id: NEIGHBOR_1 }),
+      warn,
+    });
+    expect(op.op).toBe('ADD');
+    expect(op.reasoning).toMatch(/unparseable/);
+    expect(op.confidence).toBe(0.8);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/unparseable reconcile response/));
+  });
+
+  it('degrades a non-JSON LLM answer to ADD', async () => {
+    const runPresetFn = vi.fn(async () => ({
+      text: 'Sorry, I cannot help with that.',
+      driver: 'test',
+      model: 'test-model',
+      prompt: 'rendered',
+    })) as unknown as typeof runPreset;
+    const op = await reconcileCandidate(candidate(), NEIGHBORS, { runPresetFn, warn: vi.fn() });
+    expect(op.op).toBe('ADD');
+  });
+
+  it('still throws when the preset call itself fails', async () => {
+    const runPresetFn = vi.fn(async () => {
+      throw new Error('preset drive.insight_reconcile.v1 not found');
+    }) as unknown as typeof runPreset;
     await expect(
-      reconcileCandidate(candidate(), NEIGHBORS, {
-        runPresetFn: presetReturning({ op: 'MERGE', target_id: NEIGHBOR_1 }),
-      }),
-    ).rejects.toThrow();
+      reconcileCandidate(candidate(), NEIGHBORS, { runPresetFn, warn: vi.fn() }),
+    ).rejects.toThrow(/not found/);
   });
 });
 
