@@ -12,14 +12,6 @@
 import { z } from 'zod';
 
 /**
- * Notes in drive.distillation.v1 carry no confidence — only
- * field_changes do. Default the notes half to a deliberately neutral
- * value rather than fabricating high confidence; adding a real
- * confidence to the notes output is a later prompt edit, not D2.
- */
-export const NOTE_DEFAULT_CONFIDENCE = 0.5;
-
-/**
  * The D1/B3 insight-candidate contract.
  *
  * - `accountId` — owning account = RLS/scope anchor (D1 insights.account_id).
@@ -70,6 +62,8 @@ export interface DistilledFieldChange {
 export interface DistilledNote {
   text: string;
   source_file_ids: string[];
+  /** 0..1, from drive.distillation.v1 (every note carries one since #77). */
+  confidence: number;
 }
 
 export interface CandidateDistillResult {
@@ -86,7 +80,10 @@ type CandidateScope = Pick<CandidateInsight, 'entityType' | 'entityId' | 'entity
 //   - phantom new candidates (campaignFolderId null): no stable external
 //     ref exists until persist creates the row — nothing D3 could
 //     reconcile against.
-function resolveScope(target: CandidateTarget, warn: (message: string) => void): CandidateScope | null {
+function resolveScope(
+  target: CandidateTarget,
+  warn: (message: string) => void,
+): CandidateScope | null {
   if (target.entityType === 'account') {
     return { entityType: 'account', entityId: target.accountId };
   }
@@ -164,7 +161,7 @@ export function toCandidateInsights(
     push({
       text: note.text,
       sourceFileIds: note.source_file_ids,
-      confidence: NOTE_DEFAULT_CONFIDENCE,
+      confidence: note.confidence,
       origin: 'note',
     });
   }
