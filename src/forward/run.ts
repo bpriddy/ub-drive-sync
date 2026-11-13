@@ -339,7 +339,7 @@ async function runForwardInner(fargs: ForwardArgs): Promise<BackfillRunResult> {
             reviewerEmail: ctx.reviewerEmail ?? null,
             reviewerStaffId: ctx.reviewerStaffId ?? null,
           },
-          syncRunId: fargs.syncRunId,
+          driveSyncRunId: fargs.syncRunId,
         });
         log(
           `  ◆ insight ops: ${res.emitted} proposed, ${res.duplicatesSkipped} already pending, ${res.noops} NOOP — from ${outcome.candidates.length} candidate(s)`,

@@ -339,8 +339,13 @@ export function buildInsightOpProposal(
 export interface ProposeInsightOpsInput {
   ops: InsightOp[];
   reviewer: { reviewerEmail: string | null; reviewerStaffId: string | null };
-  /** Attached at emit — the op itself carries no run provenance (D3 contract). */
-  syncRunId: string;
+  /**
+   * The drive_sync_runs row (the v2 queue run) that produced these ops.
+   * Attached at emit — the op itself carries no run provenance (D3 contract).
+   * Stored in drive_change_proposals.drive_sync_run_id: sync_run_id
+   * references the v1 sync_runs table, so a queue id there fails with 23503.
+   */
+  driveSyncRunId: string;
   /** Injectable seam: embedding client (fail-soft — see below). */
   embed?: (texts: string[]) => Promise<number[][]>;
 }
@@ -424,7 +429,7 @@ export async function proposeInsightOps(
         reviewerEmail: input.reviewer.reviewerEmail,
         reviewerStaffId: input.reviewer.reviewerStaffId,
         expiresAt,
-        syncRunId: input.syncRunId,
+        driveSyncRunId: input.driveSyncRunId,
       },
     });
     emitted++;
