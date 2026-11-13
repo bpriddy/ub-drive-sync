@@ -107,13 +107,21 @@ export class GeminiLlmDriver implements LlmDriver {
       (req.thinkingBudget === undefined
         ? thinkingLevelFor(req.tag, config.GEMINI_THINKING_BY_TAG ?? {})
         : undefined);
+    // Media parts go first, the text prompt last (the document-understanding
+    // order). Without media the plain string is sent, as before.
+    const contents = req.media?.length
+      ? [
+          ...req.media.map((m) => ({ inlineData: { data: m.dataBase64, mimeType: m.mimeType } })),
+          req.prompt,
+        ]
+      : req.prompt;
     let lastErr: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const attemptStartedAt = Date.now();
       try {
         const res = await this.client.models.generateContent({
           model: req.model,
-          contents: req.prompt,
+          contents,
           config: {
             ...(timeoutMs > 0 ? { httpOptions: { timeout: timeoutMs } } : {}),
             temperature: req.temperature,
@@ -311,6 +319,7 @@ function allowConfiguredDeadlines(): void {
     config.GEMINI_TIMEOUT_INTERPRET_MS,
     config.GEMINI_TIMEOUT_DISTILL_MS,
     config.GEMINI_TIMEOUT_CLASSIFY_MS,
+    config.GEMINI_TIMEOUT_VISION_MS,
     config.GEMINI_TIMEOUT_DEFAULT_MS,
   ]);
   if (needed === null) return;

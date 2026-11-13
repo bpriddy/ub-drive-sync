@@ -133,6 +133,62 @@ const EnvSchema = z.object({
    */
   SKIP_UNCHANGED_CONTENT: z.enum(['off', 'on']).default('off'),
   /**
+   * Vision extraction of PDFs: the pages go to Gemini as a PDF part and come
+   * back as the marked text the Google-native walkers emit, instead of the
+   * text layer alone (image-set decks, charts and tables the text layer
+   * drops). `off` (the default) is the behaviour before it: no vision call,
+   * no change to any hash or request. `on`, for the scan core's PDFs only
+   * (processBatch asks for it; the v1 sync, discovery and the ideas CLI do
+   * not):
+   *   - a PDF within the size and page caps is transcribed, inside the
+   *     download byte budget, and the text layer remains the fallback;
+   *   - a permanent vision failure (cap, block, empty answer) falls back to the
+   *     text layer for good; a transient one falls back and leaves the row's
+   *     content hash off, so the file is read again at its next event;
+   *   - the PDF's unchanged-content hash carries a vision marker (only for
+   *     PDFs the caps admit), so turning the flag on re-reads a touched PDF
+   *     once and nothing else.
+   *
+   * Owner: the Drive scan hardening track (#71). Cutover: run the eval
+   * (`npm run eval-vision -- --plan` first, $0), set `on` on dev in deploy.yml
+   * for one account for two or three forward runs, watching the
+   * `[scan.vision] batch` line, `[gemini] usage` by tag `drive.vision_extraction.v1`
+   * and the fallback reasons. If cost and quality hold, `on` becomes the only
+   * behaviour and the flag is deleted. Rollback is `off`: nothing to undo.
+   */
+  DRIVE_VISION_PDF: z.enum(['off', 'on']).default('off'),
+  /**
+   * Largest PDF (bytes, from Drive's metadata) sent to vision; a bigger one
+   * keeps the text layer. Inline requests carry the base64 of the bytes, so
+   * this is also the memory a call holds (about 3.7x the file, see
+   * VISION_RESERVE_FACTOR in drive/vision-gate.ts). A tuning setting.
+   */
+  DRIVE_VISION_MAX_FILE_SIZE_BYTES: z
+    .string()
+    .default('14680064')
+    .transform(Number)
+    .pipe(z.number().int().safe().min(1)),
+  /**
+   * Most pages a PDF may have for vision; a longer one keeps the text layer.
+   * Each page costs about 525 input and a few hundred output tokens. A tuning
+   * setting.
+   */
+  DRIVE_VISION_MAX_PDF_PAGES: z
+    .string()
+    .default('50')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  /**
+   * Output token ceiling for one transcription. A MAX_TOKENS answer is retried
+   * once by the driver and then fails, so a cap that is too low is paid twice.
+   * A tuning setting.
+   */
+  DRIVE_VISION_MAX_OUTPUT_TOKENS: z
+    .string()
+    .default('32768')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  /**
    * Worker-pool concurrency for the per-entity distill+synth+write loop
    * inside processBatch. Each entity owns a discrete status_markdown blob
    * on its own row (one per account, one per campaign) — workers never
@@ -151,6 +207,8 @@ const EnvSchema = z.object({
   GEMINI_TIMEOUT_INTERPRET_MS: timeoutMs('120000'),
   GEMINI_TIMEOUT_DISTILL_MS: timeoutMs('240000'),
   GEMINI_TIMEOUT_CLASSIFY_MS: timeoutMs('420000'),
+  /** Vision transcription of a PDF (DRIVE_VISION_PDF). */
+  GEMINI_TIMEOUT_VISION_MS: timeoutMs('180000'),
   /** Every other Gemini call (synthesis, ideas, asset folders, merges…). */
   GEMINI_TIMEOUT_DEFAULT_MS: timeoutMs('300000'),
 

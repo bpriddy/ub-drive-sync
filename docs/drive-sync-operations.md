@@ -301,6 +301,40 @@ Use it to diagnose where time is going. If `Synthesize` dominates,
 heavy entity day. If `Structure cache` shows MINUTES instead of seconds,
 the cache isn't being read (chunk #1 of a chain or cache invalidated).
 
+### Vision extraction of PDFs (`DRIVE_VISION_PDF`)
+
+Off by default. When on, the scan core transcribes a PDF with Gemini document
+understanding instead of reading its text layer alone, and the text layer stays
+the fallback. Only the scan core asks (the v1 sync, discovery and the ideas CLI
+keep the text layer), only for PDFs within `DRIVE_VISION_MAX_FILE_SIZE_BYTES`
+(Drive's metadata size) and `DRIVE_VISION_MAX_PDF_PAGES`, and only on the
+enterprise Gemini surface (the mock and the API-key path never take vision
+traffic).
+
+- **Memory.** A vision PDF reserves 4x its size from the download budget, so it
+  is counted for the base64 and the request body it holds besides the file.
+- **Failures.** A permanent one (over the page cap, an empty answer, a 4xx, an
+  answer cut at the output cap) falls back to the text layer for good. A
+  transient one (429, 5xx, timeout, dropped connection, after the driver's own
+  retries) falls back too, but leaves the row's content hash off, so the file is
+  read again at its next Activity event instead of being skipped as unchanged.
+- **Hash.** With `SKIP_UNCHANGED_CONTENT=on`, a vision PDF's `bin:` hash carries a
+  vision marker. Turning the flag on re-reads a touched PDF once; every other
+  file's hash is unchanged.
+- **Summary line.** `Vision PDFs: N transcribed, N on the text layer, N degraded (retried at the next event)`,
+  and the structured `[scan.vision] batch` log (`visionOk`, `visionFellBack`,
+  `visionDegraded`, `reasons` by fallback reason). Both appear only while the
+  flag is on.
+- **Cost.** Every call is tallied under the tag `drive.vision_extraction.v1` in
+  the run's token summary and in the `[gemini] usage` lines. About 525 input and
+  a few hundred output tokens per page (derived from a small first eval, not a
+  measurement): a 50-page dense PDF is on the order of $0.20.
+- **Eval before the flag.** `npm run eval-vision -- run --fixtures <dir> --plan`
+  prints the call count and the cost estimate ($0, no model client loaded);
+  the paid run needs `--max-usd`. Fixtures and outputs stay outside the repo.
+- **Rollback.** `DRIVE_VISION_PDF=off`. Nothing to undo: rows written while it
+  was on keep their text.
+
 ---
 
 ## Troubleshooting

@@ -66,3 +66,12 @@ describe('thinkingLevelFor', () => {
     expect(callTypeOf('unit.test')).toBeNull();
   });
 });
+
+describe('the vision call type', () => {
+  it('names the PDF transcription tag, so a version bump keeps the short name', () => {
+    expect(callTypeOf('drive.vision_extraction.v1')).toBe('vision');
+    expect(callTypeOf('drive.vision_extraction.v2')).toBe('vision');
+    expect(thinkingLevelFor('drive.vision_extraction.v1', { vision: 'LOW' })).toBe('LOW');
+    expect(parseThinkingMap('{"vision":"MINIMAL"}')).toEqual({ vision: 'MINIMAL' });
+  });
+});
