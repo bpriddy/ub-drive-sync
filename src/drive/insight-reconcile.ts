@@ -22,13 +22,7 @@
 import { z } from 'zod';
 import { prisma } from '../prisma';
 import { logger } from '../logger';
-import {
-  embedTexts,
-  parseLlmJson,
-  runPreset,
-  SchemaType,
-  type Schema,
-} from '../ai';
+import { embedTexts, parseLlmJson, runPreset, SchemaType, type Schema } from '../ai';
 import { CandidateInsightSchema, type CandidateInsight } from './candidate-insight';
 
 export const RECONCILE_PRESET_KEY = 'drive.insight_reconcile.v1';
@@ -109,8 +103,7 @@ const reconcileResponseSchema: Schema = {
     new_text: {
       type: SchemaType.STRING,
       nullable: true,
-      description:
-        'For UPDATE: the merged/refreshed insight text (no facts lost). NULL otherwise.',
+      description: 'For UPDATE: the merged/refreshed insight text (no facts lost). NULL otherwise.',
     },
     reasoning: {
       type: SchemaType.STRING,
@@ -249,7 +242,25 @@ export async function reconcileCandidate(
     },
   });
 
-  const response = ReconcileLlmResponseSchema.parse(parseLlmJson(completion.text));
+  // An unparseable or off-contract answer costs this candidate a duplicate
+  // ADD (the same safe degrade as the guards below), not the window: thrown
+  // here it would escape reconcileCandidates and drop every op. Errors from
+  // runPreset itself (missing preset, API failure) still propagate.
+  let response: z.infer<typeof ReconcileLlmResponseSchema>;
+  try {
+    response = ReconcileLlmResponseSchema.parse(parseLlmJson(completion.text));
+  } catch (err) {
+    const reason = err instanceof Error ? err.message.split('\n')[0]!.slice(0, 120) : String(err);
+    warn(
+      `unparseable reconcile response (${reason}) — emitting ADD ("${candidate.text.slice(0, 60)}")`,
+    );
+    return addOp(
+      candidate,
+      'reconcile response unparseable — ADD is the safe degrade',
+      candidate.confidence,
+      retrieval,
+    );
+  }
 
   if (response.op === 'ADD') {
     return addOp(candidate, response.reasoning, response.confidence, retrieval);
@@ -302,7 +313,9 @@ export async function reconcileCandidate(
  *   - otherwise embed → retrieve → reconcile.
  *
  * Errors propagate — the flag-gated dryrun caller fails soft (a missing
- * preset must not kill the scan print), the eval wants the throw.
+ * preset must not kill the scan print), the eval wants the throw. An
+ * unparseable LLM answer is not an error here: reconcileCandidate degrades
+ * that one candidate to ADD.
  */
 export async function reconcileCandidates(
   candidates: CandidateInsight[],

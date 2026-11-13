@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   CandidateInsightSchema,
-  NOTE_DEFAULT_CONFIDENCE,
   toCandidateInsights,
   type CandidateDistillResult,
   type CandidateTarget,
@@ -48,7 +47,7 @@ const oneOfEach: CandidateDistillResult = {
       confidence: 0.85,
     },
   ],
-  notes: [{ text: 'Client wants a June launch.', source_file_ids: ['file_c'] }],
+  notes: [{ text: 'Client wants a June launch.', source_file_ids: ['file_c'], confidence: 0.7 }],
 };
 
 describe('toCandidateInsights — mapping', () => {
@@ -77,7 +76,7 @@ describe('toCandidateInsights — mapping', () => {
     expect(candidate!.text).toBe('budget → (null) (stated in the brief)');
   });
 
-  it('maps a note to a candidate with the default confidence', () => {
+  it("maps a note to a candidate with the note's own confidence", () => {
     const [candidate] = toCandidateInsights(existingCampaignTarget, {
       ...emptyDistill,
       notes: oneOfEach.notes,
@@ -89,7 +88,7 @@ describe('toCandidateInsights — mapping', () => {
       entityStatus: 'existing',
       text: 'Client wants a June launch.',
       sourceFileIds: ['file_c'],
-      confidence: NOTE_DEFAULT_CONFIDENCE,
+      confidence: 0.7,
       origin: 'note',
     });
   });
@@ -175,7 +174,7 @@ describe('toCandidateInsights — provenance and validation (A1)', () => {
     const warn = vi.fn();
     const candidates = toCandidateInsights(
       existingCampaignTarget,
-      { ...emptyDistill, notes: [{ text: '', source_file_ids: ['file_c'] }] },
+      { ...emptyDistill, notes: [{ text: '', source_file_ids: ['file_c'], confidence: 0.7 }] },
       warn,
     );
     expect(candidates).toEqual([]);

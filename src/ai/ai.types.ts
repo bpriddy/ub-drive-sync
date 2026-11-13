@@ -36,6 +36,11 @@ export interface LlmCompletionRequest {
    * thinkingBudget — set at most one.
    */
   thinkingLevel?: 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH';
+  /**
+   * Per-attempt deadline in ms (0 = none). Omit to use
+   * GEMINI_TIMEOUT_DEFAULT_MS. A timed-out attempt is retried like a 408.
+   */
+  timeoutMs?: number;
 }
 
 export interface LlmUsage {
@@ -43,6 +48,8 @@ export interface LlmUsage {
   thoughtsTokens: number | null;
   outputTokens: number | null;
   totalTokens: number | null;
+  /** Prompt tokens served from the context cache (billed at a lower rate). */
+  cachedContentTokens: number | null;
 }
 
 export interface LlmCompletionResult {
@@ -54,6 +61,8 @@ export interface LlmCompletionResult {
   raw?: unknown;
   /** Token accounting from the provider (prompt / thoughts / output). */
   usage?: LlmUsage;
+  /** The first candidate's finishReason (STOP, MAX_TOKENS, SAFETY, ...). */
+  finishReason?: string | null;
 }
 
 export interface LlmDriver {
