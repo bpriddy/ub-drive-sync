@@ -18,6 +18,7 @@ vi.mock('../../config', () => ({ config: { DRIVE_PROPOSAL_TTL_DAYS: 7 } }));
 vi.mock('../output', () => ({ log: vi.fn() }));
 
 import { loadPendingNoteTexts, proposeTarget } from '../propose';
+import { log } from '../output';
 import type { ProposeTargetInput } from '../propose';
 import type { ValidatedChange } from '../persist';
 import type { EntityCtx } from '../batch-types';
@@ -84,7 +85,12 @@ describe('proposeTarget: field_change rows', () => {
   it('writes one pending field_change row carrying provenance, reviewer and TTL expiry', async () => {
     const result = await proposeTarget(makeInput({ validatedChanges: [makeChange()] }));
 
-    expect(result).toEqual({ fieldProposals: 1, noteItems: 0, duplicatesSkipped: 0 });
+    expect(result).toEqual({
+      fieldProposals: 1,
+      noteItems: 0,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 0,
+    });
     expect(mocks.create).toHaveBeenCalledTimes(1);
     const data = mocks.create.mock.calls[0]![0].data;
     expect(data).toMatchObject({
@@ -195,7 +201,12 @@ describe('proposeTarget: re-propose guard', () => {
   it('skips a change whose value equals the pending proposal and counts it', async () => {
     mocks.findMany.mockResolvedValue([{ id: 'prop-1', proposedValue: 5000 }]);
     const result = await proposeTarget(makeInput({ validatedChanges: [makeChange()] }));
-    expect(result).toEqual({ fieldProposals: 0, noteItems: 0, duplicatesSkipped: 1 });
+    expect(result).toEqual({
+      fieldProposals: 0,
+      noteItems: 0,
+      duplicatesSkipped: 1,
+      noteDuplicatesSkipped: 0,
+    });
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
@@ -219,7 +230,12 @@ describe('proposeTarget: re-propose guard', () => {
   it('still writes a new row when the pending proposal has a different value', async () => {
     mocks.findMany.mockResolvedValue([{ id: 'prop-1', proposedValue: 4500 }]);
     const result = await proposeTarget(makeInput({ validatedChanges: [makeChange()] }));
-    expect(result).toEqual({ fieldProposals: 1, noteItems: 0, duplicatesSkipped: 0 });
+    expect(result).toEqual({
+      fieldProposals: 1,
+      noteItems: 0,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 0,
+    });
     expect(mocks.create).toHaveBeenCalledTimes(1);
   });
 
@@ -230,7 +246,12 @@ describe('proposeTarget: re-propose guard', () => {
       { id: 'prop-old', proposedValue: 5000 },
     ]);
     const result = await proposeTarget(makeInput({ validatedChanges: [makeChange()] }));
-    expect(result).toEqual({ fieldProposals: 0, noteItems: 0, duplicatesSkipped: 1 });
+    expect(result).toEqual({
+      fieldProposals: 0,
+      noteItems: 0,
+      duplicatesSkipped: 1,
+      noteDuplicatesSkipped: 0,
+    });
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
@@ -240,7 +261,12 @@ describe('proposeTarget: re-propose guard', () => {
       { id: 'prop-b', proposedValue: 4000 },
     ]);
     const result = await proposeTarget(makeInput({ validatedChanges: [makeChange()] }));
-    expect(result).toEqual({ fieldProposals: 1, noteItems: 0, duplicatesSkipped: 0 });
+    expect(result).toEqual({
+      fieldProposals: 1,
+      noteItems: 0,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 0,
+    });
   });
 
   it('dedupes per change: skips the duplicate, writes the other', async () => {
@@ -255,7 +281,12 @@ describe('proposeTarget: re-propose guard', () => {
         ],
       }),
     );
-    expect(result).toEqual({ fieldProposals: 1, noteItems: 0, duplicatesSkipped: 1 });
+    expect(result).toEqual({
+      fieldProposals: 1,
+      noteItems: 0,
+      duplicatesSkipped: 1,
+      noteDuplicatesSkipped: 0,
+    });
     expect(mocks.create.mock.calls[0]![0].data.property).toBe('status');
   });
 });
@@ -272,7 +303,12 @@ describe('proposeTarget: note batches', () => {
     ];
     const result = await proposeTarget(makeInput({ notes }));
 
-    expect(result).toEqual({ fieldProposals: 0, noteItems: 2, duplicatesSkipped: 0 });
+    expect(result).toEqual({
+      fieldProposals: 0,
+      noteItems: 2,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 0,
+    });
     expect(mocks.create).toHaveBeenCalledTimes(1);
     const data = mocks.create.mock.calls[0]![0].data;
     expect(data).toMatchObject({
@@ -301,7 +337,12 @@ describe('proposeTarget: note batches', () => {
         notes: [{ text: 'Note A', source_file_ids: ['file-9'] }],
       }),
     );
-    expect(result).toEqual({ fieldProposals: 1, noteItems: 1, duplicatesSkipped: 0 });
+    expect(result).toEqual({
+      fieldProposals: 1,
+      noteItems: 1,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 0,
+    });
     expect(mocks.create.mock.calls.map((c) => c[0].data.kind)).toEqual([
       'field_change',
       'additional_update',
@@ -310,7 +351,12 @@ describe('proposeTarget: note batches', () => {
 
   it('writes nothing for an empty change set', async () => {
     const result = await proposeTarget(makeInput());
-    expect(result).toEqual({ fieldProposals: 0, noteItems: 0, duplicatesSkipped: 0 });
+    expect(result).toEqual({
+      fieldProposals: 0,
+      noteItems: 0,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 0,
+    });
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
@@ -345,8 +391,20 @@ describe('proposeTarget: new-candidate fallback', () => {
       }),
     );
 
-    expect(result).toEqual({ fieldProposals: 0, noteItems: 2, duplicatesSkipped: 0 });
-    expect(mocks.findMany).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      fieldProposals: 0,
+      noteItems: 2,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 0,
+    });
+    // No field_change guard read: the only lookup is the account card's pending notes.
+    expect(mocks.findMany).toHaveBeenCalledTimes(1);
+    expect(mocks.findMany.mock.calls[0]![0].where).toMatchObject({
+      kind: 'additional_update',
+      entityType: 'account',
+      accountId: 'acct-1',
+      campaignId: null,
+    });
     expect(mocks.create).toHaveBeenCalledTimes(1);
     const data = mocks.create.mock.calls[0]![0].data;
     expect(data).toMatchObject({
@@ -409,8 +467,387 @@ describe('proposeTarget: new-candidate fallback', () => {
     const result = await proposeTarget(
       makeInput({ entityStatus: 'new', entityId: null, entityName: 'Empty' }),
     );
-    expect(result).toEqual({ fieldProposals: 0, noteItems: 0, duplicatesSkipped: 0 });
+    expect(result).toEqual({
+      fieldProposals: 0,
+      noteItems: 0,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 0,
+    });
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('proposeTarget: note exact-text guard', () => {
+  const pendingNotes = (...texts: string[]) => [
+    { proposedValue: { items: texts.map((text) => ({ text, source_file_ids: ['file-0'] })) } },
+  ];
+
+  it('reads the live pending notes of the same target before writing', async () => {
+    await proposeTarget(
+      makeInput({ notes: [{ text: 'Note A', source_file_ids: ['file-1'], confidence: 0.7 }] }),
+    );
+    expect(mocks.findMany).toHaveBeenCalledWith({
+      where: {
+        kind: 'additional_update',
+        property: '__note__',
+        entityType: 'campaign',
+        accountId: 'acct-1',
+        campaignId: 'camp-1',
+        state: 'pending',
+        expiresAt: { gt: NOW },
+      },
+      select: { proposedValue: true },
+    });
+  });
+
+  it('drops an item whose exact text is pending and writes the others', async () => {
+    mocks.findMany.mockResolvedValue(pendingNotes('Kickoff moved to March'));
+    const result = await proposeTarget(
+      makeInput({
+        notes: [
+          { text: 'Kickoff moved to March', source_file_ids: ['file-1'], confidence: 0.7 },
+          { text: 'Legal review pending', source_file_ids: ['file-2'], confidence: 0.7 },
+        ],
+      }),
+    );
+
+    expect(result).toEqual({
+      fieldProposals: 0,
+      noteItems: 1,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 1,
+    });
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    const data = mocks.create.mock.calls[0]![0].data;
+    expect(data.proposedValue).toEqual({
+      items: [{ text: 'Legal review pending', source_file_ids: ['file-2'], confidence: 0.7 }],
+    });
+    // The dropped item's files leave the row with it.
+    expect(data.sourceFileIds).toEqual(['file-2']);
+  });
+
+  it('writes no row when every item is already pending', async () => {
+    mocks.findMany.mockResolvedValue([
+      ...pendingNotes('Kickoff moved to March'),
+      ...pendingNotes('Legal review pending'),
+    ]);
+    const result = await proposeTarget(
+      makeInput({
+        notes: [
+          { text: 'Kickoff moved to March', source_file_ids: ['file-1'], confidence: 0.7 },
+          { text: 'Legal review pending', source_file_ids: ['file-2'], confidence: 0.7 },
+        ],
+      }),
+    );
+    expect(result).toEqual({
+      fieldProposals: 0,
+      noteItems: 0,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 2,
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('still writes the field rows when every note is already pending', async () => {
+    mocks.findMany
+      .mockResolvedValueOnce([]) // field_change guard for 'budget'
+      .mockResolvedValueOnce(pendingNotes('Note A'));
+    const result = await proposeTarget(
+      makeInput({
+        validatedChanges: [makeChange()],
+        notes: [{ text: 'Note A', source_file_ids: ['file-9'], confidence: 0.7 }],
+      }),
+    );
+    expect(result).toEqual({
+      fieldProposals: 1,
+      noteItems: 0,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 1,
+    });
+    expect(mocks.create.mock.calls.map((c) => c[0].data.kind)).toEqual(['field_change']);
+  });
+
+  it('matches after trim and whitespace collapse, but never case or punctuation', async () => {
+    mocks.findMany.mockResolvedValue(pendingNotes('Kickoff moved to March'));
+    const dupes = [
+      '  Kickoff moved to March',
+      'Kickoff moved to March  ',
+      'Kickoff   moved\tto\nMarch',
+    ].map((text) => ({ text, source_file_ids: ['file-1'], confidence: 0.7 }));
+    const written = [
+      'Kickoff moved to March.',
+      'kickoff moved to march',
+      'The kickoff is now in March',
+    ].map((text) => ({ text, source_file_ids: ['file-1'], confidence: 0.7 }));
+    const result = await proposeTarget(makeInput({ notes: [...dupes, ...written] }));
+    expect(result).toMatchObject({ noteItems: 3, noteDuplicatesSkipped: 3 });
+    expect(mocks.create.mock.calls[0]![0].data.proposedValue).toEqual({ items: written });
+  });
+
+  it('compares against a pending text that carries stray whitespace, and stores the new text untouched', async () => {
+    mocks.findMany.mockResolvedValue(pendingNotes('  Kickoff  moved to March '));
+    const result = await proposeTarget(
+      makeInput({
+        notes: [
+          { text: 'Kickoff moved to March', source_file_ids: ['file-1'], confidence: 0.7 },
+          { text: ' Legal  review pending ', source_file_ids: ['file-2'], confidence: 0.7 },
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ noteItems: 1, noteDuplicatesSkipped: 1 });
+    expect(mocks.create.mock.calls[0]![0].data.proposedValue).toEqual({
+      items: [{ text: ' Legal  review pending ', source_file_ids: ['file-2'], confidence: 0.7 }],
+    });
+  });
+
+  it('drops a repeat inside one batch, first occurrence wins, and its files leave with it', async () => {
+    const result = await proposeTarget(
+      makeInput({
+        notes: [
+          { text: 'Kickoff moved to March', source_file_ids: ['file-1'], confidence: 0.9 },
+          { text: 'Legal review pending', source_file_ids: ['file-2'], confidence: 0.7 },
+          { text: 'Kickoff  moved to March ', source_file_ids: ['file-3'], confidence: 0.5 },
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ noteItems: 2, noteDuplicatesSkipped: 1 });
+    const data = mocks.create.mock.calls[0]![0].data;
+    expect(data.proposedValue).toEqual({
+      items: [
+        { text: 'Kickoff moved to March', source_file_ids: ['file-1'], confidence: 0.9 },
+        { text: 'Legal review pending', source_file_ids: ['file-2'], confidence: 0.7 },
+      ],
+    });
+    expect(data.sourceFileIds).toEqual(['file-1', 'file-2']);
+  });
+
+  it('writes one row for a batch of identical items and none after it is pending', async () => {
+    const table: Array<{ proposedValue: unknown }> = [];
+    mocks.findMany.mockImplementation(async () => table);
+    mocks.create.mockImplementation(async ({ data }: { data: { proposedValue: unknown } }) => {
+      table.push({ proposedValue: data.proposedValue });
+      return {};
+    });
+    const same = { text: 'Kickoff moved to March', source_file_ids: ['file-1'], confidence: 0.7 };
+    expect(await proposeTarget(makeInput({ notes: [same, same] }))).toMatchObject({
+      noteItems: 1,
+      noteDuplicatesSkipped: 1,
+    });
+    expect(await proposeTarget(makeInput({ notes: [same, same] }))).toMatchObject({
+      noteItems: 0,
+      noteDuplicatesSkipped: 2,
+    });
+    expect(table).toHaveLength(1);
+  });
+
+  describe('against a table of rows', () => {
+    type Row = {
+      entityType: string;
+      accountId: string | null;
+      campaignId: string | null;
+      state: string;
+      expiresAt: Date;
+      proposedValue: unknown;
+    };
+    let table: Row[];
+
+    beforeEach(() => {
+      table = [];
+      // Applies the target, state and expiry filters of the real query, so the
+      // test fails if the guard stops scoping its read.
+      mocks.findMany.mockImplementation(
+        async ({ where }: { where: Record<string, unknown> & { expiresAt: { gt: Date } } }) =>
+          table.filter(
+            (r) =>
+              r.entityType === where.entityType &&
+              r.accountId === where.accountId &&
+              r.campaignId === where.campaignId &&
+              r.state === where.state &&
+              r.expiresAt > where.expiresAt.gt,
+          ),
+      );
+      mocks.create.mockImplementation(async ({ data }: { data: Row }) => {
+        table.push(data);
+        return {};
+      });
+    });
+
+    const note = [{ text: 'Kickoff moved to March', source_file_ids: ['file-1'], confidence: 0.7 }];
+
+    it('writes the same text for another campaign and for the account', async () => {
+      await proposeTarget(makeInput({ notes: note }));
+      expect(table).toHaveLength(1);
+
+      const otherCampaign = await proposeTarget(makeInput({ entityId: 'camp-2', notes: note }));
+      expect(otherCampaign.noteItems).toBe(1);
+
+      const account = await proposeTarget(
+        makeInput({
+          ctx: makeCtx(),
+          entityType: 'account',
+          entityStatus: 'account',
+          entityId: 'acct-1',
+          notes: note,
+        }),
+      );
+      expect(account.noteItems).toBe(1);
+      expect(table).toHaveLength(3);
+
+      // ...and each target still blocks its own repeat.
+      expect((await proposeTarget(makeInput({ notes: note }))).noteItems).toBe(0);
+      expect(table).toHaveLength(3);
+    });
+
+    it('does not let an expired or decided card block a write', async () => {
+      const row = (over: Partial<Row>): Row => ({
+        entityType: 'campaign',
+        accountId: 'acct-1',
+        campaignId: 'camp-1',
+        state: 'pending',
+        expiresAt: new Date(NOW.getTime() + DAY_MS),
+        proposedValue: { items: [{ text: 'Kickoff moved to March' }] },
+        ...over,
+      });
+
+      table.push(row({ expiresAt: new Date(NOW.getTime() - 1) }));
+      table.push(row({ state: 'expired' }));
+      table.push(row({ state: 'rejected' }));
+      expect((await proposeTarget(makeInput({ notes: note }))).noteItems).toBe(1);
+
+      // The card just written is live now and blocks the repeat.
+      expect((await proposeTarget(makeInput({ notes: note }))).noteItems).toBe(0);
+    });
+
+    it('writes the text again once the card it wrote has passed its TTL', async () => {
+      expect((await proposeTarget(makeInput({ notes: note }))).noteItems).toBe(1);
+
+      vi.setSystemTime(new Date(NOW.getTime() + 6 * DAY_MS)); // TTL is 7 days
+      expect((await proposeTarget(makeInput({ notes: note }))).noteItems).toBe(0);
+
+      vi.setSystemTime(new Date(NOW.getTime() + 8 * DAY_MS));
+      expect((await proposeTarget(makeInput({ notes: note }))).noteItems).toBe(1);
+      expect(table).toHaveLength(2);
+    });
+  });
+
+  describe('log line', () => {
+    const lastLog = () => String(vi.mocked(log).mock.calls.at(-1)![0]);
+
+    beforeEach(() => {
+      vi.mocked(log).mockClear();
+    });
+
+    it('is unchanged when no note is skipped', async () => {
+      await proposeTarget(
+        makeInput({
+          notes: [{ text: 'Note A', source_file_ids: ['file-1'], confidence: 0.7 }],
+        }),
+      );
+      expect(lastLog()).toBe('      → proposed for review: 0 field change(s), 1 note item(s)');
+    });
+
+    it('adds a note-specific suffix that the field suffix cannot be confused with', async () => {
+      mocks.findMany
+        .mockResolvedValueOnce(pendingNotes('unrelated')) // field guard sees a pending card
+        .mockResolvedValueOnce(pendingNotes('Note A'));
+      await proposeTarget(
+        makeInput({
+          validatedChanges: [makeChange({ validatedValue: 'x' })],
+          notes: [
+            { text: 'Note A', source_file_ids: ['file-1'], confidence: 0.7 },
+            { text: 'Note B', source_file_ids: ['file-1'], confidence: 0.7 },
+          ],
+        }),
+      );
+      expect(lastLog()).toBe(
+        '      → proposed for review: 1 field change(s), 1 note item(s) (1 note item(s) already pending)',
+      );
+    });
+  });
+
+  it('does not read pending notes when there are none to write', async () => {
+    await proposeTarget(makeInput({ validatedChanges: [makeChange()] }));
+    expect(mocks.findMany).toHaveBeenCalledTimes(1);
+    expect(mocks.findMany.mock.calls[0]![0].where.kind).toBe('field_change');
+  });
+
+  it("new candidate: drops its own pending item, keeps one pending under another candidate's marker", async () => {
+    mocks.findMany.mockResolvedValue(
+      pendingNotes(
+        '[new campaign candidate "Summer Promo"] Kickoff next week',
+        '[new campaign candidate "Fall Promo"] Budget approved',
+        'Budget approved',
+      ),
+    );
+    const result = await proposeTarget(
+      makeInput({
+        entityStatus: 'new',
+        entityId: null,
+        entityName: 'Summer Promo',
+        notes: [
+          { text: 'Kickoff next week', source_file_ids: ['file-1'], confidence: 0.7 },
+          { text: 'Budget approved', source_file_ids: ['file-2'], confidence: 0.7 },
+        ],
+      }),
+    );
+
+    expect(result).toEqual({
+      fieldProposals: 0,
+      noteItems: 1,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 1,
+    });
+    expect(mocks.create.mock.calls[0]![0].data.proposedValue).toEqual({
+      items: [
+        {
+          text: '[new campaign candidate "Summer Promo"] Budget approved',
+          source_file_ids: ['file-2'],
+          confidence: 0.7,
+        },
+      ],
+    });
+  });
+
+  it('new candidate: writes no row when every marked item is already pending', async () => {
+    mocks.findMany.mockResolvedValue(
+      pendingNotes(
+        '[new campaign candidate "Summer Promo"] budget: 9000',
+        '[new campaign candidate "Summer Promo"] Kickoff next week',
+      ),
+    );
+    const result = await proposeTarget(
+      makeInput({
+        entityStatus: 'new',
+        entityId: null,
+        entityName: 'Summer Promo',
+        validatedChanges: [makeChange({ field: 'budget', proposedValueRaw: '9000' })],
+        notes: [{ text: 'Kickoff next week', source_file_ids: ['file-2'], confidence: 0.7 }],
+      }),
+    );
+    expect(result).toEqual({
+      fieldProposals: 0,
+      noteItems: 0,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: 2,
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('a replayed window writes its notes once (E2-F3)', async () => {
+    // The prisma mocks behave like a table: what attempt 1 wrote is pending on attempt 2.
+    const table: Array<{ proposedValue: unknown }> = [];
+    mocks.findMany.mockImplementation(async () => table);
+    mocks.create.mockImplementation(async ({ data }: { data: { proposedValue: unknown } }) => {
+      table.push({ proposedValue: data.proposedValue });
+      return {};
+    });
+    const input = makeInput({
+      notes: [{ text: 'Kickoff moved to March', source_file_ids: ['file-1'], confidence: 0.7 }],
+    });
+
+    expect(await proposeTarget(input)).toMatchObject({ noteItems: 1, noteDuplicatesSkipped: 0 });
+    expect(await proposeTarget(input)).toMatchObject({ noteItems: 0, noteDuplicatesSkipped: 1 });
+    expect(table).toHaveLength(1);
   });
 });
 

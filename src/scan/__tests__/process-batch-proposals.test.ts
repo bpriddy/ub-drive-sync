@@ -131,7 +131,12 @@ beforeEach(() => {
     notes: [{ text: 'Launch moved to October', source_file_ids: ['f-brief'] }],
     driver: 'mock',
   });
-  proposeTarget.mockResolvedValue({ fieldProposals: 0, noteItems: 1, duplicatesSkipped: 0 });
+  proposeTarget.mockResolvedValue({
+    fieldProposals: 0,
+    noteItems: 1,
+    duplicatesSkipped: 0,
+    noteDuplicatesSkipped: 0,
+  });
 });
 
 describe('processBatch proposals carry the run', () => {
