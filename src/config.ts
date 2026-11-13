@@ -142,6 +142,16 @@ const EnvSchema = z.object({
    * synth → ~5min parallel.
    */
   SYNTH_CONCURRENCY: z.string().default('8').transform(Number),
+  /**
+   * D3 (#39) / D4 (#40): reconcile the scan's candidate insights against the
+   * insight store. 'off' (default) skips reconciliation entirely; 'dryrun'
+   * embeds, retrieves top-K neighbors, and prints zod-validated ops after the
+   * D2 candidate print — zero DB writes. 'propose' (forward driver only)
+   * additionally emits each non-NOOP op as a kind='insight_op'
+   * drive_change_proposal — review-gated per the B1 ruling (2026-08-19);
+   * GUB's applyDecisions writes the insights store on approval.
+   */
+  INSIGHT_RECONCILE: z.enum(['off', 'dryrun', 'propose']).default('off'),
 
   // ── Request timeouts (ms, per attempt; 0 = none) ────────────────────────
   // A stalled call used to hang until undici's 300 s fetch default (Gemini)

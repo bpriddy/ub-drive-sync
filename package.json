@@ -13,6 +13,7 @@
     "eval-ideas": "tsx -r dotenv/config scripts/eval-ideas.ts",
     "seed:status": "tsx -r dotenv/config scripts/seed-status-proposal.ts",
     "seed:new-entity": "tsx -r dotenv/config scripts/seed-new-entity-proposal.ts",
+    "seed:insights": "tsx -r dotenv/config scripts/seed-insights.ts",
     "backfill": "tsx -r dotenv/config src/backfill/index.ts",
     "clear": "tsx -r dotenv/config scripts/clear.ts",
     "merge-campaign-dupes": "tsx -r dotenv/config src/main.ts merge-campaign-dupes",
