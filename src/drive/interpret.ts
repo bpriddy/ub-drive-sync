@@ -19,6 +19,7 @@
 
 import { z } from 'zod';
 import { config } from '../config';
+import { promptFileText } from './prompt-text';
 import { logger } from '../logger';
 import { parseLlmJson, runPreset } from '../ai';
 import type { AccountCurrentState, CampaignCurrentState } from './schema';
@@ -40,7 +41,7 @@ const ObservationSchema = z.object({
   entity_campaign_name: z.string().nullable().optional(),
 });
 
-const PerFileResponseSchema = z.object({
+export const PerFileResponseSchema = z.object({
   // Whole-file classification gating the downstream idea-extraction call.
   // .catch('other') — a missing/invalid value must never fail the file;
   // it just means no idea extraction for it.
@@ -96,15 +97,13 @@ export interface InterpretFileOutput {
 }
 
 export async function interpretFile(input: InterpretFileInput): Promise<InterpretFileOutput> {
-  const max = config.GEMINI_MAX_INPUT_CHARS;
-  const truncated = input.text.length > max;
-  const fileText = truncated
-    ? `${input.text.slice(0, max)}\n…\n[TRUNCATED: ${input.text.length - max} chars omitted]`
-    : input.text;
+  const { visible, truncated, omitted } = promptFileText(input.text);
+  const fileText = truncated ? `${visible}\n…\n[TRUNCATED: ${omitted} chars omitted]` : visible;
 
   const result = await runPreset({
     key: 'drive.file_extraction.v1',
     responseSchema: perFileResponseSchema(),
+    timeoutMs: config.GEMINI_TIMEOUT_INTERPRET_MS,
     variables: {
       account_name: input.accountName ?? '(unknown)',
       campaign_name: input.campaignName ?? '(n/a)',

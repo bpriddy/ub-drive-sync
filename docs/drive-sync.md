@@ -38,21 +38,20 @@ forward sync (mode dispatch in the queue). Locked.
 
 ### Forward sync
 
-Daily (scheduled). Polls the Drive Activity API for changes since the
-last `pageToken`, re-processes the changed files, stamps observations
-with the actual edit timestamps from the activity events.
+Activity-driven (`src/forward/run.ts`, design in
+[forward-sync-v2-design.md](forward-sync-v2-design.md)). Each run reads the
+Drive Activity API for the account's Drive root in
+`(drive_forward_cursor_at, now]`, scans each changed file once in one batch
+dated by the run, tallies per-editor edit events into `drive_edit_stats`
+([edit-stats-decision.md](edit-stats-decision.md)), and moves the cursor once
+the window has committed. It proposes; review applies.
 
-- Triggered by Cloud Scheduler (terraform); operator can also click
-  **Sync** in gub-admin to fire one immediately.
-- Same chunking + continuation pattern; the changeset window is bounded
-  by `pageToken` rather than calendar day.
-- Status: **stub today.** Forward mode runs through the same engine but
-  doesn't yet poll Activity API — it walks `modifiedTime` buckets like
-  bootstrap. Real Activity-driven forward sync is the next milestone.
-- **When building it, start from [edit-stats-decision.md](edit-stats-decision.md)**
-  — the per-editor edit-event stats (decided 2026-07-20) ride this build:
-  the same Activity event stream feeds both file re-processing and the
-  `drive_edit_stats` tally. Scope is already granted and probe-verified.
+- Triggered by Cloud Scheduler `drive-poll-<env>` in mode `forward-all`, on
+  the cadence set in gub-admin (daily on dev); **Run now** on the same
+  gub-admin panel fires one immediately.
+- A run drains its whole window: no chunking, no continuation chain.
+- How a run works, the cadence per environment, and what changes under a
+  weekly cadence: [drive-sync-operations.md](drive-sync-operations.md#forward-sync-after-bootstrap).
 
 ---
 
@@ -146,9 +145,9 @@ migration (`20260610100000_drive_bootstrap_cache`).
 | `drive_bootstrap_cursor` | DATE | Latest completed modifiedTime day in the bootstrap walk. NULL = bootstrap hasn't started. |
 | `drive_bootstrap_completed_at` | TIMESTAMPTZ | Set ONCE when bootstrap catches the cursor up to today. After this, forward sync owns the account. |
 | `drive_last_synced_at` | TIMESTAMPTZ | Latest completed forward sync. NULL until first forward chunk. |
-| `drive_activity_page_token` | TEXT | Activity API pageToken for the next forward run. NULL before first forward chunk. |
+| `drive_activity_page_token` | TEXT | Legacy, unused by the Activity-driven forward driver: its cursor is `drive_forward_cursor_at` (TIMESTAMPTZ, the end of the last committed window). |
 | `drive_structure_classification` | JSONB | Cached `{ fingerprint, entityMap, folders, ... }`. Built by bootstrap chunk #1; reused by chunks 2..N. SURVIVES bootstrap completion; forward sync re-uses with hash invalidation. |
-| `drive_bootstrap_files` | JSONB | Cached `{ files, activeDates }`. Built by bootstrap chunk #1; reused by chunks 2..N. NULLed on completion (~10MB payload, no value after). |
+| `drive_bootstrap_files` | JSONB | Cached `{ version: 2, files, activeDates }` (each file stored once; days list file ids). Built by bootstrap chunk #1; reused by chunks 2..N; parsed only by the bootstrap path; `loadEntity` never selects it (v1 paths that load whole account rows still read it). NULLed on completion (~10MB payload for a 25k-file drive, no value after). |
 | `status_markdown` | TEXT | Synthesized human-readable summary (general bullets) |
 | `status_sensitive_markdown` | TEXT | Synthesized summary, sensitive tier (per D29) |
 
@@ -181,8 +180,8 @@ Queue of bootstrap + forward runs.
 | `next_attempt_at` | TIMESTAMPTZ | Earliest re-claim after transient failure (exponential backoff) |
 | `all_remaining` | BOOL | True → after this chunk, queue another in the same mode if work remains |
 | `files_processed` | INT | Files processed in this chunk |
-| `activity_page_token_in` | TEXT | Forward only: token handed to this chunk |
-| `activity_page_token_out` | TEXT | Forward only: token at chunk end |
+| `activity_page_token_in` | TEXT | Legacy, unused by the Activity-driven forward driver |
+| `activity_page_token_out` | TEXT | Legacy, unused by the Activity-driven forward driver |
 | `error_message` | TEXT | Last failure detail — written on transient retries and stale reclaims as well as terminal failure, and not cleared on later success, so a completed row can still show an old failure (known quirk) |
 | `log_summary` | TEXT | Last ~40 lines / 2KB of engine stdout |
 
@@ -225,15 +224,39 @@ results so chunks 2..N skip the prelude.
 
 ```jsonc
 {
-  "files": [ /* TraversedFile[] — full file metadata */ ],
-  "activeDates": [ /* DayBucket[] — pre-bucketed by modifiedTime */ ]
+  "version": 2,
+  "files": [ /* TraversedFile[] — full file metadata, each file ONCE */ ],
+  "activeDates": [ /* { "date": "YYYY-MM-DD", "fileIds": [ids into files] } per active day */ ]
 }
 ```
 
 - Built by bootstrap chunk #1, written via `persistBootstrapFilesCache`.
-- Reused by chunks 2..N as-is.
+- Reused by chunks 2..N as-is, read via `loadBootstrapFilesCache`. In the
+  scan core only the bootstrap path asks for it: `loadEntity` selects every
+  other `accounts` column, so structure-only and forward runs never pull the
+  blob. Account writes read back only the id. The v1 paths that load whole
+  account rows (`include` in `drive/orchestrator.ts` and `drive/discover.ts`)
+  and gub-admin's account pages still read the column, without parsing it.
 - NULLed on bootstrap completion (no value after; forward sync uses
   Activity API).
+- The first format had no `version` key and stored every file twice (in
+  `files` and again in `activeDates[].files`). It is still read — a chain
+  started before version 2 keeps its cache — and is never written. Version 2
+  halves the bytes per file, which roughly doubles how many files fit under
+  PostgreSQL's ~255 MB jsonb limit; a much larger drive needs the cache
+  split into per-chunk rows instead of one value.
+- A cache that cannot be used (unknown version, wrong shape, a day listing
+  an id that is not in `files`) is a miss: the run logs
+  `Files cache unusable (…)`, re-discovers the files and overwrites it.
+- Rollback: a build from before version 2 reads a version-2 cache as a hit
+  and then fails on the first day (its days carry `fileIds`, not `files`).
+  Before rolling back, drop the caches that were written in the new format;
+  the next chunk re-discovers:
+
+  ```sql
+  UPDATE accounts SET drive_bootstrap_files = NULL
+  WHERE drive_bootstrap_files ->> 'version' = '2';
+  ```
 
 ### Fingerprint
 
@@ -261,9 +284,15 @@ For every file in the day's bucket:
 
 1. **Extract** (`src/drive/extract.ts`): pull content from Drive.
    - Google-native (Docs/Slides/Sheets): per-type Workspace API. Returns
-     structured-but-flat text.
+     structured-but-flat text. No byte cap (nothing is downloaded); the
+     walked text is capped by `NATIVE_MAX_CHARS` and a longer one is
+     skipped with `too_many_chars` (the API response itself is not bounded).
    - Binary (PDF/DOCX/PPTX/text/*): `downloadFileBuffer` + per-type
      parser. Size cap (`DRIVE_MAX_FILE_SIZE_BYTES`, default 300MB).
+     Downloads and their parse run under a byte-weighted budget
+     (`src/drive/download.ts`): the metadata sizes in flight sum to at
+     most `DOWNLOAD_INFLIGHT_BYTES`, and a file at or above
+     `DOWNLOAD_HEAVY_BYTES` (or of unknown size) runs alone.
    - `predictExtractionSkip` is the metadata-only skip check
      `extractText` runs first — unsupported mimes and oversize files
      short-circuit without any I/O.
@@ -441,10 +470,12 @@ src/heal/                       Drive-aware staff/account healing (older).
 prisma/schema.prisma            Mirrored schema (drive_sync_runs +
                                 accounts/campaigns fields).
 
-cloudbuild/
-  dev.yaml                      Cloud Build trigger for dev environment.
-                                --memory=2Gi --cpu=1. Heartbeat watcher
-                                in engine relies on this headroom.
+.github/workflows/deploy.yml    Deploys the dev Cloud Run Job. Its FLAGS
+                                are the runtime config: --memory=2Gi
+                                --cpu=1. Heartbeat watcher in engine
+                                relies on this headroom.
+cloudbuild/                     staging.yaml / prod.yaml: provisioning
+                                references for unported environments.
 
 docs/
   drive-sync.md                 This file.
@@ -500,6 +531,9 @@ Environment variables consumed at runtime by gub-drive-sync. Defined in
 | `GEMINI_API_KEY` | — | Gemini API key. |
 | `GEMINI_MAX_INPUT_CHARS` | 40000 | Per-file LLM input truncation cap. |
 | `DRIVE_MAX_FILE_SIZE_BYTES` | 314572800 (300MB) | Binary download cap. Google-native bypasses. |
+| `DOWNLOAD_INFLIGHT_BYTES` | 629145600 (600MiB) | Most bytes of binary downloads (fetch + parse) in flight at once; sized from file metadata. |
+| `DOWNLOAD_HEAVY_BYTES` | 52428800 (50MiB) | A file at or above this size, or of unknown size, runs alone. Must not exceed `DOWNLOAD_INFLIGHT_BYTES` (boot fails otherwise). |
+| `NATIVE_MAX_CHARS` | 2000000 | Google-native Docs/Sheets/Slides have no byte size to check, so their walked text is capped instead: over it the file is skipped (`too_many_chars`), not truncated. |
 | `SYNTH_CONCURRENCY` | 8 | Per-entity worker pool size for distill+synth. |
 | `GCP_PROJECT_ID` / `GCP_REGION` / `DRIVE_SYNC_JOB_NAME` | — | Required for `scheduleContinuation` to fire fresh Job executions. |
 
@@ -507,7 +541,7 @@ Cloud Run Job resource limits (terraform / cloudbuild yaml):
 
 | Setting | Value | Why |
 |---|---|---|
-| `--memory` | 2Gi | OOM'd at 1Gi on Chevy's large day-buckets. The `[mem]` heap watcher logs every 30s for diagnostics. |
+| `--memory` | 2Gi | OOM'd at 1Gi on the largest account's day-buckets. The `[mem]` heap watcher logs every 30s for diagnostics. |
 | `--cpu` | 1 | I/O-bound (Drive + Gemini). 1 CPU is enough. |
 | `--task-timeout` | 86400s (24h) | Conservative cap; individual chunks aim for ~5-45 min. |
 | `--parallelism` | 1 | One execution per Job at a time. Continuation chains chunks; in-execution synth is parallel via worker pool. |
