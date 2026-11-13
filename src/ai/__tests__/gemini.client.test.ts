@@ -421,3 +421,59 @@ describe('GeminiLlmDriver truncation guard', () => {
     );
   });
 });
+
+/** The JSON body the SDK sent for call `n` (the request the transport saw). */
+function sentBody(n = 0): { contents: unknown; generationConfig?: Record<string, unknown> } {
+  return JSON.parse(String(fetchMock.mock.calls[n]![1]!.body));
+}
+
+describe('GeminiLlmDriver media (vision) requests', () => {
+  it('sends media parts first and the text prompt last, in one user content', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse());
+    await driver().complete({
+      ...REQ,
+      prompt: 'transcribe',
+      media: [{ mimeType: 'application/pdf', dataBase64: 'UERGLWJ5dGVz' }],
+    });
+    expect(sentBody().contents).toEqual([
+      {
+        role: 'user',
+        parts: [
+          { inlineData: { data: 'UERGLWJ5dGVz', mimeType: 'application/pdf' } },
+          { text: 'transcribe' },
+        ],
+      },
+    ]);
+  });
+
+  it('sends a text-only request as the single text part it always was', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse());
+    await driver().complete(REQ);
+    expect(sentBody().contents).toEqual([{ role: 'user', parts: [{ text: 'hi' }] }]);
+    fetchMock.mockResolvedValueOnce(okResponse());
+    await driver().complete({ ...REQ, media: [] });
+    expect(sentBody(1).contents).toEqual(sentBody(0).contents);
+  });
+
+  it('retries a 429 on a media request like any other, with the same media', async () => {
+    fetchMock
+      .mockResolvedValueOnce(errorResponse(429, 'Too Many Requests'))
+      .mockResolvedValueOnce(okResponse());
+    const media = [{ mimeType: 'application/pdf', dataBase64: 'AAAA' }];
+    await expect(driver().complete({ ...REQ, media })).resolves.toMatchObject({
+      text: '{"ok":true}',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sentBody(1).contents).toEqual(sentBody(0).contents);
+  });
+
+  it('keeps the typed ApiError (status intact) for a media request: no SDK retry wrapper', async () => {
+    fetchMock.mockResolvedValue(errorResponse(400, 'Bad Request'));
+    const err = await driver()
+      .complete({ ...REQ, media: [{ mimeType: 'application/pdf', dataBase64: 'AAAA' }] })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(400);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

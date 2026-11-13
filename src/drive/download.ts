@@ -60,14 +60,18 @@ function logLargeFile(fileId: string, bytes: number, metadataBytes: number | nul
 /**
  * Download `file` under the byte budget and hand the bytes to `use`. `file.size`
  * is the size from listing / files.get metadata; null (unknown) is treated as
- * heavy. `budget` exists for tests; production callers use the process-wide one.
+ * heavy. `reserveBytes`, when given, replaces it as the reservation. `budget` exists for tests; production callers use the process-wide one.
  */
 export async function withDownloadedFile<T>(
-  file: { id: string; size: number | null },
+  file: { id: string; size: number | null; reserveBytes?: number | null },
   use: (buf: Buffer) => Promise<T>,
   budget: ByteBudget = downloadBudget(),
 ): Promise<T> {
-  const release = await budget.acquire(file.size);
+  // `reserveBytes` is for a parse that holds more than the file itself (vision
+  // builds the request body next to it); absent, the reservation is the size.
+  const release = await budget.acquire(
+    file.reserveBytes === undefined ? file.size : file.reserveBytes,
+  );
   try {
     const buf = await downloadFileBuffer(file.id);
     // Measured on the bytes actually received, and before `use`: the PDF parser

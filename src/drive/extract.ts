@@ -19,7 +19,10 @@
  *                        values.batchGet                 (extractor='gsheet')
  *
  *   Binary:
- *     - application/pdf                     → pdf-parse           (extractor='pdf')
+ *     - application/pdf → unpdf text layer (extractor='pdf'); when the scan
+ *       core asks (ExtractOptions.vision) and DRIVE_VISION_PDF is on, Gemini
+ *       document understanding first (extractor='vision', extract-vision.ts),
+ *       the text layer as its fallback
  *     - application/vnd.openxmlformats-…wordprocessingml.document  → mammoth (.docx)
  *     - text/* (plaintext, markdown, csv, etc.) → direct download (extractor='plaintext')
  *
@@ -38,6 +41,7 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { withDownloadedFile } from './download';
 import { pacedCall } from './pacing';
+import { isVisionPdf, VISION_RESERVE_FACTOR } from './vision-gate';
 import { buildBotOAuthClient } from '../workspace';
 import type { ExtractionOutcome, ExtractionSkip, TraversedFile } from './types';
 
@@ -267,7 +271,23 @@ export function predictExtractionSkip(file: TraversedFile): ExtractionSkip | nul
   }
 }
 
-export async function extractText(file: TraversedFile): Promise<ExtractionOutcome> {
+/**
+ * What a caller asks of extractText beyond today's behaviour. Absent, the
+ * result is what it was before vision existed.
+ */
+export interface ExtractOptions {
+  /**
+   * 'pdf': try vision on a PDF that DRIVE_VISION_PDF and its size admit, and
+   * fall back to the text layer (src/drive/extract-vision.ts). Only the scan
+   * core asks; the v1 sync, discovery and the ideas CLI keep the text layer.
+   */
+  vision?: 'pdf';
+}
+
+export async function extractText(
+  file: TraversedFile,
+  opts?: ExtractOptions,
+): Promise<ExtractionOutcome> {
   // Single source of truth for skip-without-I/O decisions.
   const predicted = predictExtractionSkip(file);
   if (predicted) return predicted;
@@ -311,8 +331,29 @@ export async function extractText(file: TraversedFile): Promise<ExtractionOutcom
       //    Each branch downloads and parses inside withDownloadedFile's byte
       //    reservation, sized from effectiveFile.size (a missing size counts as
       //    heavy). `return await`, so a failure still lands in the catch below.
-      case MIME.PDF:
-        return await withDownloadedFile(effectiveFile, async (buf) => {
+      case MIME.PDF: {
+        const wantVision = opts?.vision === 'pdf' && isVisionPdf(effectiveFile);
+        // A vision PDF reserves more than its own bytes: the call holds the
+        // file plus its base64 and the request body (vision-gate.ts).
+        const reservation = wantVision
+          ? {
+              id: effectiveFile.id,
+              size: effectiveFile.size,
+              reserveBytes: effectiveFile.size! * VISION_RESERVE_FACTOR,
+            }
+          : effectiveFile;
+        return await withDownloadedFile(reservation, async (buf) => {
+          // Vision first, inside the reservation. Imported lazily: with the
+          // flag off the model client is never loaded here. The attempt leaves
+          // `buf` intact (its page count works on a copy), so the text layer
+          // below can still take it, as the one reader that detaches it.
+          let visionFallback: { fallback: string; transient: boolean } | null = null;
+          if (wantVision) {
+            const { tryVisionPdfExtraction } = await import('./extract-vision');
+            const attempt = await tryVisionPdfExtraction(effectiveFile, buf);
+            if ('text' in attempt) return ok(attempt.text, 'vision');
+            visionFallback = attempt;
+          }
           // Import lazily to keep the parser off the module init path.
           //
           // `unpdf` is a thin modern wrapper over `pdfjs-dist`'s legacy
@@ -351,11 +392,18 @@ export async function extractText(file: TraversedFile): Promise<ExtractionOutcom
           // file's memory outside the budget until the next PDF replaces it.
           try {
             const { text } = await extractText(pdf, { mergePages: true });
-            return ok(text, 'pdf');
+            const outcome = ok(text, 'pdf');
+            if (visionFallback === null || outcome.kind !== 'ok') return outcome;
+            return {
+              ...outcome,
+              visionFallback: visionFallback.fallback,
+              ...(visionFallback.transient ? { degraded: true } : {}),
+            };
           } finally {
             await pdf.destroy();
           }
         });
+      }
       case MIME.DOCX:
         return await withDownloadedFile(effectiveFile, async (buf) => {
           const { value } = await mammoth.extractRawText({ buffer: buf });

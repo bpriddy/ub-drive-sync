@@ -280,6 +280,11 @@ export async function processBatch(
   let filesUnchanged = 0;
   /** Of filesUnchanged, the ones matched on Drive's md5 before any download. */
   let filesUnchangedBeforeDownload = 0;
+  /** DRIVE_VISION_PDF=on: PDFs transcribed by vision / kept on the text layer / kept on it by a transient failure. */
+  let visionOk = 0;
+  let visionFellBack = 0;
+  let visionDegraded = 0;
+  const visionReasons: Record<string, number> = {};
   /** Files in the Drive trash (SKIP_UNCHANGED_CONTENT=on); also in filesSkipped. */
   let filesTrashed = 0;
   let filesZeroObs = 0;
@@ -431,7 +436,11 @@ export async function processBatch(
       };
     }
     try {
-      const extraction = await timed('extract_text', () => extractText(file));
+      const extraction = await timed('extract_text', () =>
+        // Vision is asked of the scan core alone, and only with the flag on:
+        // off, the call is the one it always was.
+        config.DRIVE_VISION_PDF === 'on' ? extractText(file, { vision: 'pdf' }) : extractText(file),
+      );
       if (extraction.kind !== 'ok') {
         return {
           file,
@@ -502,6 +511,14 @@ export async function processBatch(
         );
       }
 
+      if (extraction.extractor === 'vision') visionOk++;
+      else if (extraction.visionFallback !== undefined) {
+        if (extraction.degraded) visionDegraded++;
+        else visionFellBack++;
+        visionReasons[extraction.visionFallback] =
+          (visionReasons[extraction.visionFallback] ?? 0) + 1;
+      }
+
       return {
         file,
         attribution,
@@ -511,7 +528,10 @@ export async function processBatch(
         // A failed idea extraction must not mark the file as fully read: with
         // the hash on its row, the gate would never retry the ideas. Without
         // it, the row stays extracted and the next event re-reads the file.
-        ...(ideaCandidates === 'failed' && config.SKIP_UNCHANGED_CONTENT === 'on'
+        // The same for a PDF whose vision call failed transiently: its row
+        // holds the text layer's stand-in, to be read again at the next event.
+        ...((ideaCandidates === 'failed' || extraction.degraded === true) &&
+        config.SKIP_UNCHANGED_CONTENT === 'on'
           ? {}
           : { contentHash }),
         res,
@@ -1022,6 +1042,23 @@ export async function processBatch(
         priorHashes: priorHashes.size,
       },
       '[scan.content-gate] batch',
+    );
+  }
+  if (visionOk + visionFellBack + visionDegraded > 0) {
+    // The line the $0 post-deploy checks count while the flag is being tried.
+    log(
+      `  👁 Vision PDFs: ${visionOk} transcribed, ${visionFellBack} on the text layer, ${visionDegraded} degraded (retried at the next event)`,
+    );
+    logger.info(
+      {
+        accountId: ctx.accountId,
+        filesAttempted: batch.length,
+        visionOk,
+        visionFellBack,
+        visionDegraded,
+        reasons: visionReasons,
+      },
+      '[scan.vision] batch',
     );
   }
   if (transientFileErrors > 0) {

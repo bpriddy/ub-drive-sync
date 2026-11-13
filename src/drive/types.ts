@@ -59,6 +59,17 @@ export interface ExtractionResult {
   text: string;
   contentHash: string;
   extractor: string;
+  /**
+   * Set when vision was attempted for a PDF and the text layer answered
+   * instead: why (a VisionFallback reason). Absent for every other outcome.
+   */
+  visionFallback?: string;
+  /**
+   * The vision failure was transient, so this text-layer result is a stand-in:
+   * the worker leaves the content hash off the row, and the file is read again
+   * at its next event instead of being skipped as unchanged.
+   */
+  degraded?: boolean;
 }
 
 export interface ExtractionSkip {

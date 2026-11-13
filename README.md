@@ -276,6 +276,31 @@ entire transaction rolls back — production stays strict, enforced by the DB
 (not by `NODE_ENV`, which is `production` on the deployed dev job). Local
 equivalent: `npm run clear -- --account-id <uuid>` (same shared code path).
 
+## Vision eval (`eval-vision`)
+
+`scripts/eval-vision.ts` compares a PDF's text layer with the vision
+transcription (`DRIVE_VISION_PDF`) on a local directory of PDFs, each with an
+optional `<id>.gold.json` of facts that must and must not appear
+(`{"must_include": [...], "must_not_include": [...]}`). No Drive access, no
+database.
+
+```bash
+# $0: count pages and print the call count and cost estimate; no model client is loaded
+npm run eval-vision -- run --fixtures ~/vision-pdfs --plan
+
+# PAID: one Gemini call per PDF the caps admit. Needs an explicit go, and always --max-usd.
+npm run eval-vision -- run --fixtures ~/vision-pdfs --out ~/vision-eval --max-usd 1
+
+# $0: re-score a saved run after fixing the gold files
+npm run eval-vision -- score --fixtures ~/vision-pdfs --run ~/vision-eval/eval-vision-<time>.json
+```
+
+The script refuses fixtures or outputs inside the repository (transcriptions
+are customer content); `scripts/eval-vision-example/` holds a synthetic PDF to
+try `--plan` on. A call starts only if one attempt at its full output allowance
+still fits under `--max-usd`; the PDF's own tokens are counted from its page
+count.
+
 ## Ideas eval (`eval-ideas`)
 
 `scripts/eval-ideas.ts` measures the ideas pipeline against a hand-labelled

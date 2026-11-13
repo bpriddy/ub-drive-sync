@@ -41,6 +41,15 @@ export interface LlmCompletionRequest {
    * GEMINI_TIMEOUT_DEFAULT_MS. A timed-out attempt is retried like a 408.
    */
   timeoutMs?: number;
+  /**
+   * Inline binary media (a PDF for Gemini document understanding). Each entry
+   * is sent as an inlineData part AHEAD of the text prompt. Omitted or empty:
+   * the request is the plain prompt string, exactly as before. Callers bound
+   * the raw bytes themselves (base64 adds a third). The mock driver ignores
+   * media, so a caller that needs real content must not take a mock answer as
+   * an extraction.
+   */
+  media?: Array<{ mimeType: string; dataBase64: string }>;
 }
 
 export interface LlmUsage {

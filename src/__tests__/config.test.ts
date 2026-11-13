@@ -15,7 +15,17 @@ vi.hoisted(() => {
 import { loadConfig } from '../config';
 
 const MIB = 1024 * 1024;
-const KEYS = ['DOWNLOAD_INFLIGHT_BYTES', 'DOWNLOAD_HEAVY_BYTES', 'NATIVE_MAX_CHARS'] as const;
+const KEYS = [
+  'DOWNLOAD_INFLIGHT_BYTES',
+  'DOWNLOAD_HEAVY_BYTES',
+  'NATIVE_MAX_CHARS',
+  'DRIVE_VISION_PDF',
+  'DRIVE_VISION_MAX_FILE_SIZE_BYTES',
+  'DRIVE_VISION_MAX_PDF_PAGES',
+  'DRIVE_VISION_MAX_OUTPUT_TOKENS',
+  'GEMINI_TIMEOUT_VISION_MS',
+  'GEMINI_THINKING_BY_TAG',
+] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -92,5 +102,35 @@ describe('NATIVE_MAX_CHARS', () => {
   it.each(['0', '-1', '1.5', 'abc', '1e300'])('rejects %j', (bad) => {
     process.env['NATIVE_MAX_CHARS'] = bad;
     expect(() => loadConfig()).toThrow(/NATIVE_MAX_CHARS/);
+  });
+});
+
+describe('vision extraction settings', () => {
+  it('default to off, with the caps and the deadline chosen for it', () => {
+    const c = loadConfig();
+    expect(c.DRIVE_VISION_PDF).toBe('off');
+    expect(c.DRIVE_VISION_MAX_FILE_SIZE_BYTES).toBe(14 * MIB);
+    expect(c.DRIVE_VISION_MAX_PDF_PAGES).toBe(50);
+    expect(c.DRIVE_VISION_MAX_OUTPUT_TOKENS).toBe(32768);
+    expect(c.GEMINI_TIMEOUT_VISION_MS).toBe(180000);
+  });
+
+  it('turn on only by the exact word, and reject anything else at boot', () => {
+    process.env['DRIVE_VISION_PDF'] = 'on';
+    expect(loadConfig().DRIVE_VISION_PDF).toBe('on');
+    for (const bad of ['true', 'ON', '1']) {
+      process.env['DRIVE_VISION_PDF'] = bad;
+      expect(() => loadConfig()).toThrow(/DRIVE_VISION_PDF/);
+    }
+  });
+
+  it.each(['0', '-1', '1.5', 'abc'])('reject %j as a page cap', (bad) => {
+    process.env['DRIVE_VISION_MAX_PDF_PAGES'] = bad;
+    expect(() => loadConfig()).toThrow(/DRIVE_VISION_MAX_PDF_PAGES/);
+  });
+
+  it('let GEMINI_THINKING_BY_TAG address the vision call type', () => {
+    process.env['GEMINI_THINKING_BY_TAG'] = '{"vision":"LOW"}';
+    expect(loadConfig().GEMINI_THINKING_BY_TAG).toEqual({ vision: 'LOW' });
   });
 });
