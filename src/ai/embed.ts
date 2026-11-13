@@ -20,7 +20,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { config } from '../config';
 import { logger } from '../logger';
-import { isRetryable } from './gemini.client';
+import { isRetryableLlmError } from './retryable';
 
 export const EMBEDDING_MODEL = 'gemini-embedding-001';
 export const EMBEDDING_DIM = 1536;
@@ -115,9 +115,9 @@ class GeminiEmbeddingDriver implements EmbeddingDriver {
         });
       } catch (err) {
         lastErr = err;
-        // Our own shape errors above never match isRetryable's patterns —
+        // Our own shape errors above never match isRetryableLlmError —
         // only transport and API-level transient failures retry.
-        const retryable = isRetryable(err);
+        const retryable = isRetryableLlmError(err);
         const willRetry = retryable && attempt < MAX_ATTEMPTS;
         logger.debug(
           { err, model: EMBEDDING_MODEL, batch: chunk.length, attempt, retryable, willRetry },

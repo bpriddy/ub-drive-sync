@@ -7,6 +7,11 @@
  * needed: this Job has no HTTP surface, no auth issuance, no CORS.
  */
 import { z } from 'zod';
+import { parseThinkingMap } from './ai/thinking';
+
+/** A per-request timeout in ms; `0` disables it (the pre-timeout behaviour). */
+const timeoutMs = (fallback: string) =>
+  z.string().default(fallback).transform(Number).pipe(z.number().int().min(0));
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -32,7 +37,69 @@ const EnvSchema = z.object({
   // Cloud Run Job's --memory should be >=1Gi (currently 1Gi; bump to
   // 2Gi if you start seeing OOM on the largest PDFs).
   DRIVE_MAX_FILE_SIZE_BYTES: z.string().default('314572800').transform(Number),
+  // In-flight budget for BINARY downloads. A download is buffered whole and its
+  // parser then builds structures next to the buffer, so N workers x up to
+  // DRIVE_MAX_FILE_SIZE_BYTES can exceed the job's memory. The metadata sizes
+  // of the downloads in flight (fetch + parse) sum to at most
+  // DOWNLOAD_INFLIGHT_BYTES; a file at or above DOWNLOAD_HEAVY_BYTES, or of
+  // unknown size, runs alone. 600 MiB / 50 MiB: a transfer briefly holds ~2x its
+  // size (the chunks plus the concatenated Buffer), which still fits the 2Gi
+  // job. No flag: the default is the bound, and it only limits concurrency.
+  // HEAVY must not exceed INFLIGHT (checked in loadConfig).
+  DOWNLOAD_INFLIGHT_BYTES: z
+    .string()
+    .default('629145600')
+    .transform(Number)
+    .pipe(z.number().int().safe().min(1)),
+  DOWNLOAD_HEAVY_BYTES: z
+    .string()
+    .default('52428800')
+    .transform(Number)
+    .pipe(z.number().int().safe().min(1)),
+  // Google-native files (Docs/Sheets/Slides) have no byte size to check before
+  // the read, so their cap is on the extracted TEXT: a file whose walked text is
+  // longer than this is skipped (skip_reason 'too_many_chars'), not truncated.
+  // 2M characters is far above real documents (an 825k-character sheet has been
+  // seen). It bounds what goes on to hashing, the LLM stage and the DB; the API
+  // response itself is already in memory by the time the walker returns.
+  NATIVE_MAX_CHARS: z
+    .string()
+    .default('2000000')
+    .transform(Number)
+    .pipe(z.number().int().safe().min(1)),
   DRIVE_PROPOSAL_TTL_DAYS: z.string().default('14').transform(Number),
+  /**
+   * drive_file_snapshots rows (the Drive name index) allowed to fail per
+   * batch before the run itself fails. 0 = any failed row fails the run, so
+   * the queue retries it and a DB/schema problem cannot quietly empty the
+   * index again. Raising it is a stop-gap while that problem is fixed: the
+   * files over the limit stay stale in the index until they change again.
+   */
+  SNAPSHOT_WRITE_FAILURE_LIMIT: z
+    .string()
+    .default('0')
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
+  /**
+   * Folder classify prompt size (#69). `off` (the default) sends the whole
+   * folder tree. `auto` sends folders down to one level below the deepest
+   * campaign root of the previous classification or campaign anchor, plus
+   * every anchor and its ancestors; deeper folders appear as a count on their
+   * shown ancestor.
+   *
+   * Owner: the Drive scan hardening track (#71). Cutover: measure the prompt
+   * size offline first (`npm run classify-prompt-size`, $0), then set `auto` on
+   * dev in deploy.yml. After two weeks of forward runs whose classification
+   * matches the weekly uncapped pass, `auto` becomes the only behaviour and the
+   * flag is deleted. A mismatch means back to `off`.
+   */
+  CLASSIFY_DEPTH_CAP_MODE: z.enum(['off', 'auto']).default('off'),
+  /** The `auto` cap for an account with no previous campaign root. */
+  CLASSIFY_DEFAULT_DEPTH_CAP: z
+    .string()
+    .default('5')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
 
   // ── AI / Gemini ──────────────────────────────────────────────────────────
   GEMINI_API_KEY: z.string().optional(),
@@ -55,6 +122,17 @@ const EnvSchema = z.object({
   GEMINI_LOCATION: z.string().default('global'),
   GEMINI_MAX_INPUT_CHARS: z.string().default('40000').transform(Number),
   /**
+   * Content-aware skips in the scan core. `off` (the default) is the behaviour
+   * before them. `on`:
+   *   - Drive is asked for the files' content markers (drive/client.ts fileFields);
+   *   - a trashed file is skipped (skip_reason 'trashed');
+   *   - snapshot rows carry the versioned content hash (src/scan/content-gate.ts);
+   *   - the forward run skips interpret and idea extraction for a file whose
+   *     content hash matches its newest committed extracted row
+   *     (skip_reason 'content_unchanged'; docs/drive-file-index.md).
+   */
+  SKIP_UNCHANGED_CONTENT: z.enum(['off', 'on']).default('off'),
+  /**
    * Worker-pool concurrency for the per-entity distill+synth+write loop
    * inside processBatch. Each entity owns a discrete status_markdown blob
    * on its own row (one per account, one per campaign) — workers never
@@ -71,6 +149,54 @@ const EnvSchema = z.object({
    * candidate print — zero DB writes in any mode (persistence is D4).
    */
   INSIGHT_RECONCILE: z.enum(['off', 'dryrun']).default('off'),
+
+  // ── Request timeouts (ms, per attempt; 0 = none) ────────────────────────
+  // A stalled call used to hang until undici's 300 s fetch default (Gemini)
+  // or forever (googleapis). Each Gemini attempt aborts at its call type's
+  // deadline and is retried like a 408. Distill calls of ~185 s are
+  // legitimate; folder classify can run past 300 s.
+  GEMINI_TIMEOUT_INTERPRET_MS: timeoutMs('120000'),
+  GEMINI_TIMEOUT_DISTILL_MS: timeoutMs('240000'),
+  GEMINI_TIMEOUT_CLASSIFY_MS: timeoutMs('420000'),
+  /** Every other Gemini call (synthesis, ideas, asset folders, merges…). */
+  GEMINI_TIMEOUT_DEFAULT_MS: timeoutMs('300000'),
+
+  /**
+   * Thinking level per Gemini call (#69): a JSON object from a call tag, or
+   * a short call-type name such as "interpret" or "distill" (src/ai/
+   * thinking.ts), to MINIMAL | LOW | MEDIUM | HIGH. Empty, the default,
+   * sends no thinking parameter: every call runs at the model's default
+   * level, as before. That is the rollback.
+   *
+   * Owner: the Drive scan hardening track (#71). It is a tuning setting, not a
+   * rollout flag: the October A/B kept the default for interpret, so nothing
+   * sets it today. If it is still empty six months after this lands, delete it
+   * and the per-tag plumbing; set a tag only with an A/B that shows the same
+   * answers at the lower level.
+   */
+  GEMINI_THINKING_BY_TAG: z
+    .string()
+    .default('{}')
+    .transform((raw, ctx) => {
+      try {
+        return parseThinkingMap(raw);
+      } catch (err) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: (err as Error).message });
+        return z.NEVER;
+      }
+    }),
+  /**
+   * LOCAL A/B runs only (scripts/ab-thinking.ts, #69): when set, every
+   * preset call appends its rendered prompt and answer to
+   * `<dir>/<preset key>.jsonl` (src/ai/capture.ts). Records hold customer
+   * content, so a directory inside this repository is refused. Never set it
+   * in a deployed environment. Unset, the default, captures nothing.
+   */
+  GEMINI_CAPTURE_DIR: z.string().optional(),
+  /** Drive / Docs / Slides / Sheets / Activity / People reads. */
+  DRIVE_READ_TIMEOUT_MS: timeoutMs('60000'),
+  /** Binary downloads (files.get alt=media), headers + body. */
+  DRIVE_MEDIA_TIMEOUT_MS: timeoutMs('300000'),
 
   // ── Notify URLs ──────────────────────────────────────────────────────────
   GUB_ADMIN_BASE_URL: z.string().url().default('http://localhost:5173'),
@@ -105,10 +231,17 @@ export function loadConfig(): Config {
   }
   const parsed = EnvSchema.safeParse(cleaned);
   if (!parsed.success) {
-    const errors = parsed.error.errors
-      .map((e) => `  ${e.path.join('.')}: ${e.message}`)
-      .join('\n');
+    const errors = parsed.error.errors.map((e) => `  ${e.path.join('.')}: ${e.message}`).join('\n');
     throw new Error(`Environment configuration invalid:\n${errors}`);
+  }
+  // Cross-field: a file below the heavy threshold has to fit in the in-flight
+  // budget, or it could never be admitted. Fail at boot rather than hang on
+  // the first download.
+  const { DOWNLOAD_HEAVY_BYTES: heavy, DOWNLOAD_INFLIGHT_BYTES: inflight } = parsed.data;
+  if (heavy > inflight) {
+    throw new Error(
+      `Environment configuration invalid:\n  DOWNLOAD_HEAVY_BYTES: must not exceed DOWNLOAD_INFLIGHT_BYTES (${heavy} > ${inflight})`,
+    );
   }
   return parsed.data;
 }
