@@ -59,9 +59,11 @@ class GeminiEmbeddingDriver implements EmbeddingDriver {
   private client: GoogleGenAI;
 
   constructor(init: { project: string; location: string } | { apiKey: string }) {
-    // Same construction as GeminiLlmDriver: our loop owns retries, so the
-    // SDK's built-in retry is pinned off to keep backoff deterministic.
-    const httpOptions = { retryOptions: { attempts: 1 } };
+    // Same construction as GeminiLlmDriver: our loop owns retries, and NO
+    // retryOptions — with them set the SDK throws a plain Error for 429/5xx
+    // instead of a typed ApiError, which isRetryableLlmError cannot classify
+    // (see gemini.client.ts).
+    const httpOptions = {};
     if ('project' in init) {
       this.name = 'gemini-enterprise';
       this.client = new GoogleGenAI({
