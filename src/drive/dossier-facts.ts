@@ -23,6 +23,14 @@ import {
  */
 export const MIN_FACT_LENGTH = 3;
 
+/**
+ * Confidence for a seeded fact. A dossier carries none, so seeded facts keep
+ * the neutral 0.5 that every note got before distillation returned its own
+ * confidence (#77). Whether an already-synthesized dossier fact deserves
+ * more is an open question; this keeps the seed's behaviour unchanged.
+ */
+export const SEED_FACT_CONFIDENCE = 0.5;
+
 /** Dossier tier a seeded fact's provenance sentinel names. */
 export type DossierTier = 'status_markdown' | 'status_sensitive_markdown';
 
@@ -120,6 +128,7 @@ export function dossierFacts(args: DossierFactsArgs): DistilledNote[] {
       facts.push({
         text,
         source_file_ids: fileIds.length > 0 ? fileIds : [fallbackSourceId],
+        confidence: SEED_FACT_CONFIDENCE,
       });
     }
   };

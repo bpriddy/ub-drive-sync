@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   dossierFacts,
   dossierSourceId,
+  SEED_FACT_CONFIDENCE,
   extractSrcMarkers,
   splitDossierBullets,
 } from '../dossier-facts';
@@ -109,14 +110,17 @@ describe('dossierFacts', () => {
       {
         text: 'The campaign creative concept is titled "Drive Further".',
         source_file_ids: ['1abc'],
+        confidence: SEED_FACT_CONFIDENCE,
       },
       {
         text: 'Production is handled by the internal studio team.',
         source_file_ids: ['1def'],
+        confidence: SEED_FACT_CONFIDENCE,
       },
       {
         text: 'Shoot window planned for late September. [expires: 2026-10-01]',
         source_file_ids: ['1ghi'],
+        confidence: SEED_FACT_CONFIDENCE,
       },
     ]);
   });
@@ -155,8 +159,16 @@ describe('dossierFacts', () => {
       sensitiveSourceId: SENSITIVE,
     });
     expect(facts).toEqual([
-      { text: 'Prose-era fact without citation.', source_file_ids: [GENERAL] },
-      { text: 'Sensitive budget detail.', source_file_ids: [SENSITIVE] },
+      {
+        text: 'Prose-era fact without citation.',
+        source_file_ids: [GENERAL],
+        confidence: SEED_FACT_CONFIDENCE,
+      },
+      {
+        text: 'Sensitive budget detail.',
+        source_file_ids: [SENSITIVE],
+        confidence: SEED_FACT_CONFIDENCE,
+      },
     ]);
   });
 
@@ -170,8 +182,8 @@ describe('dossierFacts', () => {
       sensitiveSourceId: SENSITIVE,
     });
     expect(facts).toEqual([
-      { text: 'Shared fact.', source_file_ids: ['1abc'] },
-      { text: 'Only sensitive.', source_file_ids: [SENSITIVE] },
+      { text: 'Shared fact.', source_file_ids: ['1abc'], confidence: SEED_FACT_CONFIDENCE },
+      { text: 'Only sensitive.', source_file_ids: [SENSITIVE], confidence: SEED_FACT_CONFIDENCE },
     ]);
   });
 
