@@ -11,7 +11,7 @@
 // scan-core output with zero changes on its side:
 //
 //   - kind='field_change'      one row per validated field change
-//   - kind='additional_update' ONE batched row per entity per scan,
+//   - kind='additional_update' at most ONE batched row per entity per scan,
 //                              property='__note__', proposedValue={items}
 //
 // New-campaign candidates have no DB row (the proposal CHECK forbids a
@@ -62,6 +62,8 @@ export interface ProposeTargetResult {
   noteItems: number;
   /** field_change rows skipped because an identical pending proposal exists. */
   duplicatesSkipped: number;
+  /** Note items dropped because their text (whitespace-normalised) is already pending for the target or repeats earlier in the batch. */
+  noteDuplicatesSkipped: number;
 }
 
 function toJson(value: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull {
@@ -90,8 +92,10 @@ export async function proposeTarget(input: ProposeTargetInput): Promise<ProposeT
         confidence: n.confidence,
       })),
     ];
-    if (items.length === 0) return { fieldProposals: 0, noteItems: 0, duplicatesSkipped: 0 };
-    await writeNoteBatch({
+    if (items.length === 0) {
+      return { fieldProposals: 0, noteItems: 0, duplicatesSkipped: 0, noteDuplicatesSkipped: 0 };
+    }
+    const batch = await writeNoteBatch({
       entityType: 'account',
       accountId: ctx.accountId,
       campaignId: null,
@@ -100,7 +104,12 @@ export async function proposeTarget(input: ProposeTargetInput): Promise<ProposeT
       expiresAt,
       driveSyncRunId: input.driveSyncRunId,
     });
-    return { fieldProposals: 0, noteItems: items.length, duplicatesSkipped: 0 };
+    return {
+      fieldProposals: 0,
+      noteItems: batch.written,
+      duplicatesSkipped: 0,
+      noteDuplicatesSkipped: batch.alreadyPending,
+    };
   }
 
   const accountId = input.entityType === 'account' ? input.entityId : ctx.accountId;
@@ -166,8 +175,9 @@ export async function proposeTarget(input: ProposeTargetInput): Promise<ProposeT
 
   // ── additional_update batch (notes) ──────────────────────────────────────
   let noteItems = 0;
+  let noteDuplicatesSkipped = 0;
   if (notes.length > 0) {
-    await writeNoteBatch({
+    const batch = await writeNoteBatch({
       entityType: input.entityType,
       accountId,
       campaignId,
@@ -176,13 +186,14 @@ export async function proposeTarget(input: ProposeTargetInput): Promise<ProposeT
       expiresAt,
       driveSyncRunId: input.driveSyncRunId,
     });
-    noteItems = notes.length;
+    noteItems = batch.written;
+    noteDuplicatesSkipped = batch.alreadyPending;
   }
 
   log(
-    `      → proposed for review: ${fieldProposals} field change(s)${duplicatesSkipped > 0 ? ` (${duplicatesSkipped} already pending)` : ''}, ${noteItems} note item(s)`,
+    `      → proposed for review: ${fieldProposals} field change(s)${duplicatesSkipped > 0 ? ` (${duplicatesSkipped} already pending)` : ''}, ${noteItems} note item(s)${noteDuplicatesSkipped > 0 ? ` (${noteDuplicatesSkipped} note item(s) already pending)` : ''}`,
   );
-  return { fieldProposals, noteItems, duplicatesSkipped };
+  return { fieldProposals, noteItems, duplicatesSkipped, noteDuplicatesSkipped };
 }
 
 /**
@@ -194,7 +205,8 @@ export async function proposeTarget(input: ProposeTargetInput): Promise<ProposeT
  * alone wouldn't stop the next scan from proposing it again — which is
  * exactly the duplicate-card stacking review finding #2 reported.
  *
- * Returns raw item texts; the prompt does the semantic comparison.
+ * Returns raw item texts; the prompt does the semantic comparison, and
+ * writeNoteBatch drops exact-text repeats of them.
  */
 export async function loadPendingNoteTexts(args: {
   entityType: 'account' | 'campaign';
@@ -226,6 +238,11 @@ export async function loadPendingNoteTexts(args: {
   return texts;
 }
 
+/** Comparison key for note texts: trimmed, runs of whitespace collapsed. The stored text is never rewritten. */
+function noteKey(text: string): string {
+  return text.trim().replace(/\s+/g, ' ');
+}
+
 async function writeNoteBatch(args: {
   entityType: 'account' | 'campaign';
   accountId: string | null;
@@ -234,8 +251,36 @@ async function writeNoteBatch(args: {
   reviewer: { reviewerEmail: string | null; reviewerStaffId: string | null };
   expiresAt: Date;
   driveSyncRunId: string | null;
-}): Promise<void> {
-  const unionSources = Array.from(new Set(args.items.flatMap((n) => n.source_file_ids)));
+}): Promise<{ written: number; alreadyPending: number }> {
+  // Exact-text guard: the prompt is shown the pending notes and asked not to
+  // restate them, but that isn't deterministic — a later scan, the window
+  // overlap or a queue retry can write the same text again, and each copy is
+  // one more bullet for the reviewer. Paraphrases stay the prompt's job, so
+  // only whitespace is normalised: case and punctuation still count as a
+  // different note. A repeat inside this very batch is dropped too (first
+  // occurrence wins). Read-then-write like the field guard: a scan writes
+  // each target once, and candidates sharing the account card carry their
+  // own marker, so concurrent siblings never write the same text.
+  if (args.items.length === 0) return { written: 0, alreadyPending: 0 };
+  const seen = new Set(
+    (
+      await loadPendingNoteTexts({
+        entityType: args.entityType,
+        accountId: args.accountId,
+        campaignId: args.campaignId,
+      })
+    ).map(noteKey),
+  );
+  const items = args.items.filter((n) => {
+    const key = noteKey(n.text);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const alreadyPending = args.items.length - items.length;
+  if (items.length === 0) return { written: 0, alreadyPending };
+
+  const unionSources = Array.from(new Set(items.flatMap((n) => n.source_file_ids)));
   await prisma.driveChangeProposal.create({
     data: {
       driveSyncRunId: args.driveSyncRunId,
@@ -247,7 +292,7 @@ async function writeNoteBatch(args: {
       accountId: args.accountId,
       campaignId: args.campaignId,
       currentValue: Prisma.JsonNull,
-      proposedValue: { items: args.items } as unknown as Prisma.InputJsonValue,
+      proposedValue: { items } as unknown as Prisma.InputJsonValue,
       reasoning: null,
       sourceFileIds: unionSources,
       confidence: null,
@@ -257,4 +302,5 @@ async function writeNoteBatch(args: {
       expiresAt: args.expiresAt,
     },
   });
+  return { written: items.length, alreadyPending };
 }
