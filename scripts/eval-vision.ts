@@ -3,16 +3,26 @@
  * PDFs with gold facts (DRIVE_VISION_PDF cutover, step 1).
  *
  * Two modes:
- *   run    PAID unless --plan. Per PDF: the text layer (free, local), then one
- *          vision call (the production transcription call). Saves both texts
- *          and the numbers, and scores them against the gold facts. Every vision
- *          call is one Gemini request: run it only with an explicit go, and
- *          always with --max-usd.
+ *   run    PAID unless --plan. Per PDF: the text layer (free, local), then TWO
+ *          vision calls through the production path (the preset's prompt, the
+ *          PDF staged in the Cloud Storage staging bucket and read by
+ *          reference): pages alone (an empty text layer) and pages plus the
+ *          text layer, which is what the scan sends. Saves the texts and the
+ *          numbers, and scores all three against the gold facts, so the report
+ *          shows whether sending the text helps. Every vision call is one
+ *          Gemini request: run it only with an explicit go, and always with
+ *          --max-usd.
  *   score  $0. Re-scores a saved run against the fixtures' gold files.
  *
- * `run --plan` reads the local PDFs, counts their pages and prints the call
- * count and the cost estimate. It loads no model client, makes no call, and
- * reaches neither Drive nor a database.
+ * The prompt is the database preset `drive.vision_extraction.v1` (a real run
+ * needs DATABASE_URL), or a template file given with --preset-file: the way to
+ * try a prompt before it is in the database, and to smoke-test with the mock
+ * driver without one.
+ *
+ * `run --plan` reads the local PDFs, counts their pages and text-layer
+ * characters and prints the call count and the cost estimate. It loads no model
+ * client, makes no call, and reaches neither Drive, Cloud Storage nor a
+ * database.
  *
  * PDFs and outputs may hold customer content, so both must lie outside this
  * repository; the script refuses otherwise. The one exception is the
@@ -25,7 +35,9 @@
  *   npm run eval-vision -- score --fixtures <dir> --run <run file> [--out <dir>]
  *
  *   --allow-mock   let run use the mock driver (no Gemini set up): a $0 smoke
- *                  test of the plumbing; the mock returns no transcription
+ *                  test of the plumbing; the mock returns no transcription and
+ *                  nothing is staged
+ *   --preset-file  read the prompt template from this file, not the database
  *
  * EVAL_VISION_FIXTURES and EVAL_VISION_OUT stand in for --fixtures and --out.
  */
@@ -35,6 +47,7 @@ import { Budget, BudgetStop, isInside } from './eval-ideas-lib';
 import {
   INPUT_TOKENS_PER_PAGE,
   PROMPT_OVERHEAD_TOKENS,
+  TEXT_TOKENS_PER_CHAR,
   formatReport,
   guardMediaDriver,
   isRunFile,
@@ -107,23 +120,52 @@ async function limits() {
   };
 }
 
+/** The prompt: the file given with --preset-file, else the database preset. */
+async function presetFor(
+  args: Args,
+  ai: typeof import('../src/ai'),
+  key: string,
+): Promise<import('../src/ai').LoadedPreset> {
+  if (args.presetFile !== null) {
+    return {
+      key,
+      template: fs.readFileSync(args.presetFile, 'utf8'),
+      model: ai.DEFAULT_GEMINI_MODEL,
+      temperature: 0,
+    };
+  }
+  try {
+    return await ai.loadPreset(key);
+  } catch (err) {
+    return fail(
+      `cannot read preset ${key} from the database (${oneLine(err)}); set DATABASE_URL or pass --preset-file <template>`,
+    );
+  }
+}
+
 async function plan(fixtures: VisionFixture[]): Promise<void> {
   const files = [];
-  for (const f of fixtures) files.push({ id: f.id, bytes: f.bytes, pages: await pagesOf(f.file) });
+  for (const f of fixtures) {
+    const textChars = await textLayerOf(f.file).then(
+      (t) => t.length,
+      () => 0,
+    );
+    files.push({ id: f.id, bytes: f.bytes, pages: await pagesOf(f.file), textChars });
+  }
   const p = planVision(files, await limits());
   console.log(
-    `plan: ${fixtures.length} PDFs, ${p.calls} vision calls (${p.skipped} kept on the text layer by the caps); no call made`,
+    `plan: ${fixtures.length} PDFs, ${p.calls} vision calls (two per PDF the caps admit: pages alone, pages plus text; ${p.skipped} PDFs kept on the text layer by the caps); no call made`,
   );
   for (const r of p.rows) {
     console.log(
-      `  ${r.id}: ${r.bytes} bytes, ${r.pages ?? 'pages unknown (cap assumed)'}p, ${r.eligible ? `~${r.inputTokens} input tokens, expected $${r.expectedUsd.toFixed(4)}, worst attempt $${r.worstAttemptUsd.toFixed(4)}` : 'over a cap: text layer only'}`,
+      `  ${r.id}: ${r.bytes} bytes, ${r.pages ?? 'pages unknown (cap assumed)'}p, ${r.eligible ? `~${r.inputTokens} input tokens pages alone, ~${r.inputTokensWithText} with the text layer, expected $${r.expectedUsd.toFixed(4)} both arms, worst attempt $${r.worstAttemptUsd.toFixed(4)} both arms` : 'over a cap: text layer only'}`,
     );
   }
   console.log(
     `  total: expected ~$${p.expectedUsd.toFixed(2)}, worst case $${p.worstUsd.toFixed(2)} (one attempt per call at its full output allowance; the driver may retry)`,
   );
   console.log(
-    `  rates: ${INPUT_TOKENS_PER_PAGE} input and 358 output tokens per page, ${PROMPT_OVERHEAD_TOKENS} prompt tokens per call; derived from an 8-file run, not measured on this set`,
+    `  rates: ${INPUT_TOKENS_PER_PAGE} input and 358 output tokens per page, ${PROMPT_OVERHEAD_TOKENS} prompt tokens per call, ${TEXT_TOKENS_PER_CHAR} input tokens per text-layer character; derived from an 8-file run and a rule of thumb, not measured on this set`,
   );
 }
 
@@ -144,7 +186,9 @@ async function run(args: Args, fixtures: VisionFixture[]): Promise<void> {
   if (args.out === null) fail('run needs --out <dir> (or EVAL_VISION_OUT)');
   process.env['DATABASE_URL'] ||= 'postgresql://unused@localhost:1/unused';
   const ai = await import('../src/ai');
-  const { visionExtractPdf } = await import('../src/drive/extract-vision');
+  const { visionExtractPdf, VISION_PRESET_KEY } = await import('../src/drive/extract-vision');
+  const { stagePdf } = await import('../src/drive/vision-staging');
+  const { config } = await import('../src/config');
   const llm = ai.defaultLlm;
   const free = llm.name === 'mock';
   if (free && !args.allowMock) {
@@ -152,31 +196,38 @@ async function run(args: Args, fixtures: VisionFixture[]): Promise<void> {
       'no Gemini driver is configured (the mock returns no transcription); pass --allow-mock for a smoke test',
     );
   }
+  if (!free && !config.DRIVE_VISION_STAGING_BUCKET) {
+    fail('a real run stages each PDF in a bucket: set DRIVE_VISION_STAGING_BUCKET');
+  }
+  const preset = await presetFor(args, ai, VISION_PRESET_KEY);
+  // The mock never reads media: nothing is staged for it.
+  const stage = free ? async () => ({ uri: 'gs://mock/none', remove: async () => {} }) : stagePdf;
   console.log(
-    `driver ${llm.name}, model ${ai.DEFAULT_GEMINI_MODEL}, ${fixtures.length} PDFs, cap $${args.maxUsd}`,
+    `driver ${llm.name}, model ${preset.model}, ${fixtures.length} PDFs, two vision calls each, cap $${args.maxUsd}`,
   );
 
   const budget = new Budget(args.maxUsd);
   const calls: Parameters<typeof guardMediaDriver>[2] = [];
   let pagesNow = 1;
+  let textTokensNow = 0;
   guardMediaDriver(
     llm,
     budget,
     calls,
     free,
-    () => PROMPT_OVERHEAD_TOKENS + INPUT_TOKENS_PER_PAGE * pagesNow,
+    () => PROMPT_OVERHEAD_TOKENS + INPUT_TOKENS_PER_PAGE * pagesNow + textTokensNow,
   );
 
   const out = path.resolve(args.out);
   fs.mkdirSync(out, { recursive: true });
   const startedAt = new Date().toISOString();
   const runFile: RunFile = {
-    version: 1,
+    version: 2,
     kind: 'eval-vision-run',
     startedAt,
     finishedAt: null,
     driver: llm.name,
-    model: ai.DEFAULT_GEMINI_MODEL,
+    model: preset.model,
     maxUsd: args.maxUsd,
     spentUsd: 0,
     stoppedByBudget: null,
@@ -207,38 +258,55 @@ async function run(args: Args, fixtures: VisionFixture[]): Promise<void> {
       latencyMs: Date.now() - layerStarted,
     };
 
-    let vision: ArmResult;
-    const before = calls.length;
-    const started = Date.now();
-    try {
-      const res = await visionExtractPdf(fs.readFileSync(f.file));
-      const call = calls[before];
-      vision = {
-        ...emptyArm(null, res.text),
-        score: scoreText(res.text, f.gold),
-        usd: call?.usd ?? 0,
-        promptTokens: res.usage?.promptTokens ?? null,
-        outputTokens: res.usage?.outputTokens ?? null,
-        thoughtsTokens: res.usage?.thoughtsTokens ?? null,
-        latencyMs: Date.now() - started,
-      };
-    } catch (err) {
-      if (err instanceof BudgetStop) {
-        runFile.stoppedByBudget = err.message;
-        runFile.files.push({ id: f.id, bytes: f.bytes, pages, textLayer, vision: null });
-        break;
+    // One vision arm: the production call, with `layer` as the text layer.
+    // Returns null when the budget stops the run.
+    const arm = async (layer: string): Promise<ArmResult | null> => {
+      textTokensNow = Math.ceil(layer.length * TEXT_TOKENS_PER_CHAR);
+      const before = calls.length;
+      const started = Date.now();
+      try {
+        const res = await visionExtractPdf(fs.readFileSync(f.file), {
+          preset,
+          textLayer: layer,
+          stage,
+        });
+        return {
+          ...emptyArm(null, res.text),
+          score: scoreText(res.text, f.gold),
+          usd: calls[before]?.usd ?? 0,
+          promptTokens: res.usage?.promptTokens ?? null,
+          outputTokens: res.usage?.outputTokens ?? null,
+          thoughtsTokens: res.usage?.thoughtsTokens ?? null,
+          latencyMs: Date.now() - started,
+        };
+      } catch (err) {
+        if (err instanceof BudgetStop) {
+          runFile.stoppedByBudget = err.message;
+          return null;
+        }
+        return {
+          ...emptyArm(oneLine(err)),
+          usd: calls[before]?.usd ?? 0,
+          latencyMs: Date.now() - started,
+        };
       }
-      vision = {
-        ...emptyArm(oneLine(err)),
-        usd: calls[before]?.usd ?? 0,
-        latencyMs: Date.now() - started,
-      };
-    }
-    const row: FileRun = { id: f.id, bytes: f.bytes, pages, textLayer, vision };
+    };
+    const visionPages = await arm('');
+    const visionPagesText = visionPages === null ? null : await arm(layerText);
+    const row: FileRun = {
+      id: f.id,
+      bytes: f.bytes,
+      pages,
+      textLayer,
+      visionPages,
+      visionPagesText,
+    };
     runFile.files.push(row);
     save();
+    if (visionPagesText === null) break;
+    const said = (a: ArmResult) => a.error ?? `${a.chars} chars`;
     console.log(
-      `[${i + 1}/${fixtures.length}] ${f.id}: vision ${vision.error ?? `${vision.chars} chars`}, total $${budget.spentUsd.toFixed(4)}`,
+      `[${i + 1}/${fixtures.length}] ${f.id}: pages ${said(visionPages!)}, pages+text ${said(visionPagesText)}, total $${budget.spentUsd.toFixed(4)}`,
     );
   }
   runFile.finishedAt = new Date().toISOString();

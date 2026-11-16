@@ -32,6 +32,7 @@
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.22.0",
     "@google/genai": "^2.11.0",
     "@prisma/client": "^5.22.0",
     "dotenv": "^16.4.7",

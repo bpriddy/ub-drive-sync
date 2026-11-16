@@ -304,15 +304,35 @@ the cache isn't being read (chunk #1 of a chain or cache invalidated).
 ### Vision extraction of PDFs (`DRIVE_VISION_PDF`)
 
 Off by default. When on, the scan core transcribes a PDF with Gemini document
-understanding instead of reading its text layer alone, and the text layer stays
-the fallback. Only the scan core asks (the v1 sync, discovery and the ideas CLI
-keep the text layer), only for PDFs within `DRIVE_VISION_MAX_FILE_SIZE_BYTES`
-(Drive's metadata size) and `DRIVE_VISION_MAX_PDF_PAGES`, and only on the
-enterprise Gemini surface (the mock and the API-key path never take vision
-traffic).
+understanding, from the pages and the PDF's own text layer in one request, and
+the text layer stays the fallback (decision D32 in the backend repo). Only the
+scan core asks (the v1 sync, discovery and the ideas CLI keep the text layer),
+only for PDFs within `DRIVE_VISION_MAX_FILE_SIZE_BYTES` (Drive's metadata size;
+50 MB, what Gemini accepts by Cloud Storage reference) and
+`DRIVE_VISION_MAX_PDF_PAGES` (the cost control), and only on the enterprise
+Gemini surface (the mock and the API-key path never take vision traffic).
 
-- **Memory.** A vision PDF reserves 4x its size from the download budget, so it
-  is counted for the base64 and the request body it holds besides the file.
+- **The prompt is a database preset,** `drive.vision_extraction.v1`, edited live
+  like every other drive-sync prompt (its variable is `{{text_layer}}`). It is
+  seeded by a migration in the backend repo. A missing or inactive preset never
+  fails a file: the text layer answers and the file is read again at its next
+  event (`reason: preset_unavailable`).
+- **By reference, never inline.** The PDF is written to
+  `DRIVE_VISION_STAGING_BUCKET` (required while the flag is on) under a random
+  object name, read by Gemini from there (the Vertex AI service agent needs read
+  access, the job needs create/read/delete) and deleted after the call, also on
+  failure; the bucket's one-day lifecycle rule is the backstop. The object name
+  and path are never logged. A failed upload falls back like a transient failure
+  (`reason: staging_failed`).
+- **Text layer with the pages.** The text layer is extracted for every vision
+  PDF and sent in the same request; the preset takes exact wording and numbers
+  from it and describes what is only visible on the page. An image-only PDF
+  sends it empty. A PDF whose text layer cannot be read is still tried on its
+  pages alone.
+- **Memory.** A vision PDF reserves its own size from the download budget, like
+  any other PDF, for the download, the upload and the text layer. The model call
+  happens after the reservation is released, so a long Gemini call never holds
+  the download budget or pauses other downloads.
 - **Failures.** A permanent one (over the page cap, an empty answer, a 4xx, an
   answer cut at the output cap) falls back to the text layer for good. A
   transient one (429, 5xx, timeout, dropped connection, after the driver's own
@@ -330,8 +350,9 @@ traffic).
   a few hundred output tokens per page (derived from a small first eval, not a
   measurement): a 50-page dense PDF is on the order of $0.20.
 - **Eval before the flag.** `npm run eval-vision -- run --fixtures <dir> --plan`
-  prints the call count and the cost estimate ($0, no model client loaded);
-  the paid run needs `--max-usd`. Fixtures and outputs stay outside the repo.
+  prints the call count (two per PDF: pages alone, pages plus text) and the cost
+  estimate ($0, no model client loaded); the paid run needs `--max-usd` and
+  reports the two side by side. Fixtures and outputs stay outside the repo.
 - **Rollback.** `DRIVE_VISION_PDF=off`. Nothing to undo: rows written while it
   was on keep their text.
 

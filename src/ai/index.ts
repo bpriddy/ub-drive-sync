@@ -1,4 +1,5 @@
-export { runPreset, parseLlmJson } from './prompt-preset.service';
+export { runPreset, runLoadedPreset, loadPreset, parseLlmJson } from './prompt-preset.service';
+export type { LoadedPreset } from './prompt-preset.service';
 export { defaultLlm } from './gemini.client';
 export type { LlmDriver, LlmCompletionRequest, LlmCompletionResult, LlmUsage } from './ai.types';
 // The SDK's schema surface, re-exported so consumers never import the vendor

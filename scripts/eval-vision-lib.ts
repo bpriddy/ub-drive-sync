@@ -30,6 +30,11 @@ export const INPUT_TOKENS_PER_PAGE = 525;
 export const OUTPUT_TOKENS_PER_PAGE = 358;
 /** The transcription prompt and the framing around the media. */
 export const PROMPT_OVERHEAD_TOKENS = 300;
+/**
+ * Input tokens per character of the text layer that rides with the pages. A
+ * rule-of-thumb estimate for English text, not a measurement: the plan says so.
+ */
+export const TEXT_TOKENS_PER_CHAR = 0.25;
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -93,9 +98,18 @@ export interface Args {
   limit: number | null;
   plan: boolean;
   allowMock: boolean;
+  /** Read the prompt template from this file instead of the database preset. */
+  presetFile: string | null;
 }
 
-const VALUE_FLAGS = ['--fixtures', '--out', '--run', '--max-usd', '--limit'] as const;
+const VALUE_FLAGS = [
+  '--fixtures',
+  '--out',
+  '--run',
+  '--max-usd',
+  '--limit',
+  '--preset-file',
+] as const;
 const BOOLEAN_FLAGS = ['--plan', '--allow-mock'] as const;
 
 /**
@@ -146,6 +160,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Args {
     limit,
     plan: flags.has('--plan'),
     allowMock: flags.has('--allow-mock'),
+    presetFile: nonEmpty(values.get('--preset-file')),
   };
   if (mode === 'score' && args.run === null) throw new Error('score needs --run <run file>');
   if (mode === 'run' && !args.plan) {
@@ -170,14 +185,20 @@ export interface PlanRow {
   pages: number | null;
   /** Would the scan core send this file to vision (size and page caps)? */
   eligible: boolean;
+  /** Input tokens of the pages-only call. */
   inputTokens: number;
+  /** Input tokens of the pages-plus-text call (the pages and the text layer). */
+  inputTokensWithText: number;
+  /** Both arms, one call each. */
   expectedUsd: number;
-  /** One attempt that runs to the whole output allowance. */
+  /** Both arms, one attempt each that runs to the whole output allowance. */
   worstAttemptUsd: number;
 }
 
 export interface Plan {
+  /** Model calls: two per file the caps admit (pages only, pages plus text). */
   calls: number;
+  /** Files the caps keep on the text layer. */
   skipped: number;
   expectedUsd: number;
   /** Every call at its full output allowance, one attempt each. */
@@ -186,41 +207,38 @@ export interface Plan {
 }
 
 /**
- * The cost of the vision arm, from page counts and the measured rates. No
- * model, Drive or database involved: the text-layer arm is free and not
- * counted. A file the caps would keep on the text layer is skipped, as the
- * scan core would skip it.
+ * The cost of the two vision arms, from page counts, text-layer lengths and the
+ * measured rates. No model, Drive or database involved: the text-layer-only arm
+ * is free and not counted. A file the caps would keep on the text layer is
+ * skipped, as the scan core would skip it.
  */
 export function planVision(
-  files: Array<{ id: string; bytes: number; pages: number | null }>,
+  files: Array<{ id: string; bytes: number; pages: number | null; textChars: number }>,
   limits: PlanLimits,
 ): Plan {
   const rows: PlanRow[] = files.map((f) => {
     const pages = f.pages ?? limits.maxPages;
     const eligible = f.bytes <= limits.maxFileBytes && pages <= limits.maxPages;
     const inputTokens = PROMPT_OVERHEAD_TOKENS + INPUT_TOKENS_PER_PAGE * pages;
+    const inputTokensWithText = inputTokens + Math.ceil(f.textChars * TEXT_TOKENS_PER_CHAR);
     const expectedOut = Math.min(OUTPUT_TOKENS_PER_PAGE * pages, limits.maxOutputTokens);
+    const arm = (promptTokens: number, outputTokens: number) =>
+      costUsd({ promptTokens, outputTokens, thoughtsTokens: 0 });
     return {
       id: f.id,
       bytes: f.bytes,
       pages: f.pages,
       eligible,
       inputTokens,
-      expectedUsd: costUsd({
-        promptTokens: inputTokens,
-        outputTokens: expectedOut,
-        thoughtsTokens: 0,
-      }),
-      worstAttemptUsd: costUsd({
-        promptTokens: inputTokens,
-        outputTokens: limits.maxOutputTokens,
-        thoughtsTokens: 0,
-      }),
+      inputTokensWithText,
+      expectedUsd: arm(inputTokens, expectedOut) + arm(inputTokensWithText, expectedOut),
+      worstAttemptUsd:
+        arm(inputTokens, limits.maxOutputTokens) + arm(inputTokensWithText, limits.maxOutputTokens),
     };
   });
   const sent = rows.filter((r) => r.eligible);
   return {
-    calls: sent.length,
+    calls: sent.length * 2,
     skipped: rows.length - sent.length,
     expectedUsd: sent.reduce((s, r) => s + r.expectedUsd, 0),
     worstUsd: sent.reduce((s, r) => s + r.worstAttemptUsd, 0),
@@ -332,13 +350,16 @@ export interface FileRun {
   id: string;
   bytes: number;
   pages: number | null;
+  /** The text layer alone: free, local. */
   textLayer: ArmResult;
-  /** null when the budget stopped the run before this file. */
-  vision: ArmResult | null;
+  /** Vision on the pages alone (an empty text layer in the same prompt). null when the budget stopped the run before it. */
+  visionPages: ArmResult | null;
+  /** Vision on the pages with the text layer: what the scan sends. null when the budget stopped the run before it. */
+  visionPagesText: ArmResult | null;
 }
 
 export interface RunFile {
-  version: 1;
+  version: 2;
   kind: 'eval-vision-run';
   startedAt: string;
   finishedAt: string | null;
@@ -353,7 +374,7 @@ export interface RunFile {
 export function isRunFile(x: unknown): x is RunFile {
   if (typeof x !== 'object' || x === null) return false;
   const r = x as Record<string, unknown>;
-  return r['kind'] === 'eval-vision-run' && r['version'] === 1 && Array.isArray(r['files']);
+  return r['kind'] === 'eval-vision-run' && r['version'] === 2 && Array.isArray(r['files']);
 }
 
 /** Re-score a saved run against the (possibly corrected) gold, $0. */
@@ -367,7 +388,8 @@ export function rescore(run: RunFile, fixtures: VisionFixture[]): RunFile {
       return {
         ...f,
         textLayer: again(f.textLayer, g),
-        vision: f.vision ? again(f.vision, g) : null,
+        visionPages: f.visionPages ? again(f.visionPages, g) : null,
+        visionPagesText: f.visionPagesText ? again(f.visionPagesText, g) : null,
       };
     }),
   };
@@ -375,25 +397,44 @@ export function rescore(run: RunFile, fixtures: VisionFixture[]): RunFile {
 
 const pct = (v: number | null) => (v === null ? 'n/a' : `${Math.round(v * 100)}%`);
 
-/** The stdout table: one line per file and arm, then totals. Ids and numbers only. */
+/** Mean recall over the arms that ran and whose gold lists facts; null when none. */
+function meanRecall(arms: Array<ArmResult | null>): number | null {
+  const r = arms.flatMap((a) =>
+    a && a.error === null && a.score.recall !== null ? [a.score.recall] : [],
+  );
+  return r.length === 0 ? null : r.reduce((x, y) => x + y, 0) / r.length;
+}
+
+/**
+ * The stdout table: one line per file and arm, then the totals and the
+ * comparison the eval exists for: pages alone against pages plus text. Ids and
+ * numbers only.
+ */
 export function formatReport(run: RunFile): string {
   const lines: string[] = [];
-  let usd = 0;
+  const spent = { pages: 0, pagesText: 0 };
+  const visionLine = (label: string, v: ArmResult): string =>
+    `${label} ${v.error ? `error ${v.error}` : `${v.chars} chars, recall ${pct(v.score.recall)}, forbidden ${v.score.forbidden.length}`}, ${v.promptTokens ?? '?'} in / ${v.outputTokens ?? '?'} out / ${v.thoughtsTokens ?? '?'} thoughts, $${v.usd.toFixed(4)}, ${v.latencyMs} ms`;
   for (const f of run.files) {
     const t = f.textLayer;
+    const pad = ' '.repeat(f.id.length);
     lines.push(
-      `${f.id}  ${f.pages ?? '?'}p  text-layer: ${t.chars} chars, recall ${pct(t.score.recall)}, forbidden ${t.score.forbidden.length}`,
+      `${f.id}  ${f.pages ?? '?'}p  text-layer:        ${t.chars} chars, recall ${pct(t.score.recall)}, forbidden ${t.score.forbidden.length}`,
     );
-    const v = f.vision;
-    if (v) {
-      usd += v.usd;
-      lines.push(
-        `${' '.repeat(f.id.length)}        vision:     ${v.error ? `error ${v.error}` : `${v.chars} chars, recall ${pct(v.score.recall)}, forbidden ${v.score.forbidden.length}`}, ${v.promptTokens ?? '?'} in / ${v.outputTokens ?? '?'} out / ${v.thoughtsTokens ?? '?'} thoughts, $${v.usd.toFixed(4)}, ${v.latencyMs} ms`,
-      );
+    if (f.visionPages) {
+      spent.pages += f.visionPages.usd;
+      lines.push(`${pad}        ${visionLine('vision pages:     ', f.visionPages)}`);
+    }
+    if (f.visionPagesText) {
+      spent.pagesText += f.visionPagesText.usd;
+      lines.push(`${pad}        ${visionLine('vision pages+text:', f.visionPagesText)}`);
     }
   }
   lines.push(
-    `vision arm total $${usd.toFixed(4)} over ${run.files.filter((f) => f.vision).length} files`,
+    `vision pages total $${spent.pages.toFixed(4)}, pages+text total $${spent.pagesText.toFixed(4)} over ${run.files.filter((f) => f.visionPagesText).length} files`,
+  );
+  lines.push(
+    `mean recall: text layer ${pct(meanRecall(run.files.map((f) => f.textLayer)))}, vision pages ${pct(meanRecall(run.files.map((f) => f.visionPages)))}, vision pages+text ${pct(meanRecall(run.files.map((f) => f.visionPagesText)))}`,
   );
   if (run.stoppedByBudget) lines.push(`stopped: ${run.stoppedByBudget}`);
   return lines.join('\n');

@@ -10,14 +10,6 @@ import { config } from '../config';
 export const PDF_MIME = 'application/pdf';
 
 /**
- * The download reservation for a PDF that will go to vision, as a multiple of
- * its size. A vision call holds the file, its base64 (about 1.33x) and the
- * serialized request body (about 1.33x again) at once, and the page count's
- * copy is released before either is built: about 3.7x, rounded up.
- */
-export const VISION_RESERVE_FACTOR = 4;
-
-/**
  * True when the scan core would send this file to vision: the flag is on, it
  * is a PDF, and Drive's metadata size is known and within
  * DRIVE_VISION_MAX_FILE_SIZE_BYTES. An unknown size (a shortcut's target)
@@ -36,6 +28,7 @@ export function isVisionPdf(file: { mimeType: string; size: number | null }): bo
 /**
  * Appended to the unchanged-content hash input of a vision PDF, and only then,
  * so every other hash (flag off, other types) stays byte-identical. Bump it to
- * re-read the vision PDFs once after a change to the transcription prompt.
+ * re-read the vision PDFs once after a change to how they are read in code. A
+ * prompt edit in the database preset does not move it: the prompt is live data.
  */
 export const VISION_HASH_MARKER = 'vision-pdf-v1';

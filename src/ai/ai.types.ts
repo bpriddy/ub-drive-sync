@@ -42,14 +42,14 @@ export interface LlmCompletionRequest {
    */
   timeoutMs?: number;
   /**
-   * Inline binary media (a PDF for Gemini document understanding). Each entry
-   * is sent as an inlineData part AHEAD of the text prompt. Omitted or empty:
-   * the request is the plain prompt string, exactly as before. Callers bound
-   * the raw bytes themselves (base64 adds a third). The mock driver ignores
-   * media, so a caller that needs real content must not take a mock answer as
-   * an extraction.
+   * Binary media (a PDF for Gemini document understanding) by Cloud Storage
+   * reference: each entry is sent as a fileData part AHEAD of the text prompt.
+   * The `gs://` object is read by the model service itself; the bytes are never
+   * inlined in the request. Omitted or empty: the request is the plain prompt
+   * string, exactly as before. The mock driver ignores it, so a caller that
+   * needs real content must not take a mock answer as an extraction.
    */
-  media?: Array<{ mimeType: string; dataBase64: string }>;
+  mediaRefs?: Array<{ mimeType: string; fileUri: string }>;
 }
 
 export interface LlmUsage {

@@ -6,7 +6,7 @@
  * 1. MARKER GRAMMAR: extraction text, whatever produced it, must satisfy the
  *    single grammar in extract-markers.ts. Both producers are pinned: the
  *    Google-native walkers (run for real over mocked API responses) and
- *    vision-shaped transcriptions (fixtures shaped like the VISION_PROMPT
+ *    vision-shaped transcriptions (fixtures shaped like the vision preset's
  *    output; an LLM's output cannot be produced hermetically). Producer drift
  *    breaks this test instead of silently degrading the consumer prompts.
  *
@@ -105,7 +105,6 @@ import {
   MARKER_GRAMMAR_PROMPT_NOTE,
   findMarkerGrammarViolations,
 } from '../extract-markers';
-import { VISION_PROMPT } from '../extract-vision';
 import { extractIdeasFromFile } from '../idea-extraction';
 import { interpretFile, PerFileResponseSchema } from '../interpret';
 import { perFileResponseSchema } from '../structured-output';
@@ -241,7 +240,8 @@ describe('extraction marker grammar (extract-markers.ts contract)', () => {
   });
 
   it('vision PDF transcription shape satisfies the grammar (## Page N + [Chart: …])', () => {
-    // Shaped like the output VISION_PROMPT asks for (extract-vision.ts).
+    // Shaped like the output the vision preset (drive.vision_extraction.v1, a
+    // database row seeded by the backend repo) asks for.
     const visionPdf = [
       '# Acme Q3 Pitch',
       '',
@@ -258,15 +258,6 @@ describe('extraction marker grammar (extract-markers.ts contract)', () => {
     expect(findMarkerGrammarViolations(visionPdf)).toEqual([]);
     expect('## Page 1').toMatch(SECTION_MARKER);
     expect('[Chart: monthly revenue by region, peaks in March]').toMatch(VISUAL_DESCRIPTION_MARKER);
-  });
-
-  it('the vision prompt asks for exactly the grammar: title, ## Page N, tab tables, [bracketed] visuals', () => {
-    expect(VISION_PROMPT).toContain('"# <title>"');
-    expect(VISION_PROMPT).toContain('"## Page N"');
-    expect(VISION_PROMPT).toMatch(/tab-separated/);
-    expect(VISION_PROMPT).toMatch(/square brackets/);
-    // It asks for no other marker level.
-    expect(VISION_PROMPT).not.toMatch(/###/);
   });
 
   it('flags marker-shaped lines that are NOT in the grammar', () => {

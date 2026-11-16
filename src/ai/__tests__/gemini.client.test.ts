@@ -428,22 +428,22 @@ function sentBody(n = 0): { contents: unknown; generationConfig?: Record<string,
 }
 
 describe('GeminiLlmDriver media (vision) requests', () => {
-  it('sends media parts first and the text prompt last, in one user content', async () => {
+  const ref = { mimeType: 'application/pdf', fileUri: 'gs://stage-bucket/vision/0000.pdf' };
+
+  it('sends a Cloud Storage file part first and the text prompt last, in one user content', async () => {
     fetchMock.mockResolvedValueOnce(okResponse());
-    await driver().complete({
-      ...REQ,
-      prompt: 'transcribe',
-      media: [{ mimeType: 'application/pdf', dataBase64: 'UERGLWJ5dGVz' }],
-    });
+    await driver().complete({ ...REQ, prompt: 'transcribe', mediaRefs: [ref] });
     expect(sentBody().contents).toEqual([
       {
         role: 'user',
         parts: [
-          { inlineData: { data: 'UERGLWJ5dGVz', mimeType: 'application/pdf' } },
+          { fileData: { fileUri: ref.fileUri, mimeType: 'application/pdf' } },
           { text: 'transcribe' },
         ],
       },
     ]);
+    // By reference only: no bytes ride in the request.
+    expect(JSON.stringify(sentBody().contents)).not.toContain('inlineData');
   });
 
   it('sends a text-only request as the single text part it always was', async () => {
@@ -451,7 +451,7 @@ describe('GeminiLlmDriver media (vision) requests', () => {
     await driver().complete(REQ);
     expect(sentBody().contents).toEqual([{ role: 'user', parts: [{ text: 'hi' }] }]);
     fetchMock.mockResolvedValueOnce(okResponse());
-    await driver().complete({ ...REQ, media: [] });
+    await driver().complete({ ...REQ, mediaRefs: [] });
     expect(sentBody(1).contents).toEqual(sentBody(0).contents);
   });
 
@@ -459,8 +459,7 @@ describe('GeminiLlmDriver media (vision) requests', () => {
     fetchMock
       .mockResolvedValueOnce(errorResponse(429, 'Too Many Requests'))
       .mockResolvedValueOnce(okResponse());
-    const media = [{ mimeType: 'application/pdf', dataBase64: 'AAAA' }];
-    await expect(driver().complete({ ...REQ, media })).resolves.toMatchObject({
+    await expect(driver().complete({ ...REQ, mediaRefs: [ref] })).resolves.toMatchObject({
       text: '{"ok":true}',
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -470,7 +469,7 @@ describe('GeminiLlmDriver media (vision) requests', () => {
   it('keeps the typed ApiError (status intact) for a media request: no SDK retry wrapper', async () => {
     fetchMock.mockResolvedValue(errorResponse(400, 'Bad Request'));
     const err = await driver()
-      .complete({ ...REQ, media: [{ mimeType: 'application/pdf', dataBase64: 'AAAA' }] })
+      .complete({ ...REQ, mediaRefs: [ref] })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(400);

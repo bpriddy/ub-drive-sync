@@ -107,11 +107,12 @@ export class GeminiLlmDriver implements LlmDriver {
       (req.thinkingBudget === undefined
         ? thinkingLevelFor(req.tag, config.GEMINI_THINKING_BY_TAG ?? {})
         : undefined);
-    // Media parts go first, the text prompt last (the document-understanding
-    // order). Without media the plain string is sent, as before.
-    const contents = req.media?.length
+    // Media parts (Cloud Storage references) go first, the text prompt last
+    // (the document-understanding order). Without media the plain string is
+    // sent, as before.
+    const contents = req.mediaRefs?.length
       ? [
-          ...req.media.map((m) => ({ inlineData: { data: m.dataBase64, mimeType: m.mimeType } })),
+          ...req.mediaRefs.map((m) => ({ fileData: { fileUri: m.fileUri, mimeType: m.mimeType } })),
           req.prompt,
         ]
       : req.prompt;

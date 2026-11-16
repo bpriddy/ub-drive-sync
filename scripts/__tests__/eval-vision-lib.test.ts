@@ -18,7 +18,7 @@ import {
 } from '../eval-vision-lib';
 import type { LlmCompletionRequest, LlmDriver } from '../../src/ai';
 
-const LIMITS = { maxPages: 50, maxOutputTokens: 32768, maxFileBytes: 14 * 1024 * 1024 };
+const LIMITS = { maxPages: 50, maxOutputTokens: 32768, maxFileBytes: 50_000_000 };
 
 describe('parseArgs', () => {
   it('needs a mode and a fixtures directory', () => {
@@ -34,6 +34,13 @@ describe('parseArgs', () => {
     expect(parseArgs(['run', '--fixtures', '/x', '--max-usd', '1', '--out', '/o'], {}).maxUsd).toBe(
       1,
     );
+  });
+
+  it('takes an optional prompt template file, so a prompt can be tried before it is in the database', () => {
+    expect(parseArgs(['run', '--plan', '--fixtures', '/x'], {}).presetFile).toBeNull();
+    expect(
+      parseArgs(['run', '--plan', '--fixtures', '/x', '--preset-file', '/p.txt'], {}).presetFile,
+    ).toBe('/p.txt');
   });
 
   it('is strict: unknown flags, missing values and bad numbers all throw', () => {
@@ -52,32 +59,40 @@ describe('parseArgs', () => {
 });
 
 describe('planVision', () => {
-  it('prices the vision arm from pages: no call, only arithmetic', () => {
-    const p = planVision([{ id: 'a', bytes: 1000, pages: 9 }], LIMITS);
-    expect(p.calls).toBe(1);
-    // 300 + 525 x 9 input tokens, 358 x 9 output tokens at $1.50 / $9.00 per 1M.
+  it('prices both vision arms from pages and text length: two calls per file, no call made, only arithmetic', () => {
+    const p = planVision([{ id: 'a', bytes: 1000, pages: 9, textChars: 8000 }], LIMITS);
+    expect(p.calls).toBe(2);
+    // Pages alone: 300 + 525 x 9 input tokens; with the text layer, 0.25 token per character more.
     expect(p.rows[0]!.inputTokens).toBe(5025);
-    expect(p.expectedUsd).toBeCloseTo((5025 * 1.5 + 358 * 9 * 9) / 1e6, 6);
-    // Worst: the whole 32,768-token output allowance.
-    expect(p.worstUsd).toBeCloseTo((5025 * 1.5 + 32768 * 9) / 1e6, 6);
+    expect(p.rows[0]!.inputTokensWithText).toBe(5025 + 2000);
+    // Both at 358 x 9 output tokens, $1.50 / $9.00 per 1M.
+    const out = 358 * 9 * 9;
+    expect(p.expectedUsd).toBeCloseTo((5025 * 1.5 + out + (7025 * 1.5 + out)) / 1e6, 6);
+    // Worst: the whole 32,768-token output allowance, on each arm.
+    expect(p.worstUsd).toBeCloseTo((5025 * 1.5 + 32768 * 9 + (7025 * 1.5 + 32768 * 9)) / 1e6, 6);
+  });
+
+  it('an image-only PDF (no text layer) costs the same on both arms', () => {
+    const p = planVision([{ id: 'a', bytes: 1000, pages: 4, textChars: 0 }], LIMITS);
+    expect(p.rows[0]!.inputTokensWithText).toBe(p.rows[0]!.inputTokens);
   });
 
   it('leaves out what the caps keep on the text layer, as the scan core would', () => {
     const p = planVision(
       [
-        { id: 'ok', bytes: 1000, pages: 50 },
-        { id: 'long', bytes: 1000, pages: 51 },
-        { id: 'big', bytes: LIMITS.maxFileBytes + 1, pages: 3 },
+        { id: 'ok', bytes: 1000, pages: 50, textChars: 0 },
+        { id: 'long', bytes: 1000, pages: 51, textChars: 0 },
+        { id: 'big', bytes: LIMITS.maxFileBytes + 1, pages: 3, textChars: 0 },
       ],
       LIMITS,
     );
     expect(p.rows.map((r) => r.eligible)).toEqual([true, false, false]);
-    expect(p.calls).toBe(1);
+    expect(p.calls).toBe(2);
     expect(p.skipped).toBe(2);
   });
 
   it('assumes the page cap for a PDF whose pages could not be counted', () => {
-    const p = planVision([{ id: 'x', bytes: 10, pages: null }], LIMITS);
+    const p = planVision([{ id: 'x', bytes: 10, pages: null, textChars: 0 }], LIMITS);
     expect(p.rows[0]!.inputTokens).toBe(300 + 525 * 50);
   });
 });
@@ -192,7 +207,7 @@ describe('rescore and the report', () => {
     latencyMs: 7,
   });
   const run: RunFile = {
-    version: 1,
+    version: 2,
     kind: 'eval-vision-run',
     startedAt: 't',
     finishedAt: 't',
@@ -201,7 +216,16 @@ describe('rescore and the report', () => {
     maxUsd: 1,
     spentUsd: 0.01,
     stoppedByBudget: null,
-    files: [{ id: 'a', bytes: 1, pages: 2, textLayer: arm('alpha'), vision: arm('alpha beta') }],
+    files: [
+      {
+        id: 'a',
+        bytes: 1,
+        pages: 2,
+        textLayer: arm('alpha'),
+        visionPages: arm('alpha'),
+        visionPagesText: arm('alpha beta'),
+      },
+    ],
   };
 
   it('re-scores both arms against a corrected gold without a model call', () => {
@@ -215,7 +239,8 @@ describe('rescore and the report', () => {
     ];
     const again = rescore(run, fixtures);
     expect(again.files[0]!.textLayer.score.recall).toBe(0.5);
-    expect(again.files[0]!.vision!.score.recall).toBe(1);
+    expect(again.files[0]!.visionPages!.score.recall).toBe(0.5);
+    expect(again.files[0]!.visionPagesText!.score.recall).toBe(1);
     expect(isRunFile(again)).toBe(true);
     expect(isRunFile({ kind: 'eval-ideas-run' })).toBe(false);
   });
@@ -224,5 +249,47 @@ describe('rescore and the report', () => {
     const text = formatReport(rescore(run, []));
     expect(text).toContain('a  2p');
     expect(text).not.toContain('alpha');
+  });
+
+  it('scores pages alone against pages plus text, and says which recalled more', () => {
+    const fixtures = [
+      {
+        id: 'a',
+        file: '/x',
+        bytes: 1,
+        gold: { must_include: ['alpha', 'beta'], must_not_include: [] },
+      },
+    ];
+    const text = formatReport(rescore(run, fixtures));
+    expect(text).toContain('vision pages:');
+    expect(text).toContain('vision pages+text:');
+    expect(text).toContain('mean recall: text layer 50%, vision pages 50%, vision pages+text 100%');
+    expect(text).toContain('vision pages total $0.0100, pages+text total $0.0100');
+  });
+
+  it('an arm that errored or never ran does not count toward the mean recall', () => {
+    const failed = { ...arm(''), error: 'boom' };
+    const text = formatReport(
+      rescore(
+        {
+          ...run,
+          files: [{ ...run.files[0]!, visionPages: failed, visionPagesText: null }],
+        },
+        [
+          {
+            id: 'a',
+            file: '/x',
+            bytes: 1,
+            gold: { must_include: ['alpha'], must_not_include: [] },
+          },
+        ],
+      ),
+    );
+    expect(text).toContain('vision pages n/a, vision pages+text n/a');
+    expect(text).toContain('error boom');
+  });
+
+  it('refuses a version-1 run file (one arm), which this report cannot compare', () => {
+    expect(isRunFile({ ...run, version: 1 })).toBe(false);
   });
 });
