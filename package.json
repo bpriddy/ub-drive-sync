@@ -14,6 +14,7 @@
     "eval-vision": "tsx -r dotenv/config scripts/eval-vision.ts",
     "seed:status": "tsx -r dotenv/config scripts/seed-status-proposal.ts",
     "seed:new-entity": "tsx -r dotenv/config scripts/seed-new-entity-proposal.ts",
+    "seed:insights": "tsx -r dotenv/config scripts/seed-insights.ts",
     "backfill": "tsx -r dotenv/config src/backfill/index.ts",
     "clear": "tsx -r dotenv/config scripts/clear.ts",
     "merge-campaign-dupes": "tsx -r dotenv/config src/main.ts merge-campaign-dupes",
@@ -47,7 +48,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@anomaly-technology/gub-schemas": "^1.8.0",
+    "@anomaly-technology/gub-schemas": "^1.18.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.5",
     "eslint": "^10.8.1",

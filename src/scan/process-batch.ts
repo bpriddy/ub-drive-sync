@@ -50,6 +50,7 @@ import {
   mergeIdeaCandidates,
 } from '../drive/idea-scan';
 import type { ExtractedIdea } from '../drive/idea-extraction';
+import { toCandidateInsights, type CandidateInsight } from '../drive/candidate-insight';
 import type { TraversedFile } from '../drive/types';
 import { config } from '../config';
 import { binaryContentHash, contentHashFor, contentZone } from './content-gate';
@@ -1446,6 +1447,7 @@ export async function processBatch(
       const validatedChanges: ValidatedChange[] = [];
       let distilledNotes: Array<{ text: string; source_file_ids: string[]; confidence: number }> =
         [];
+      let candidates: CandidateInsight[] = [];
       // A failed distill is a stage-3 failure: on the propose path the
       // observations reach review ONLY through distillation, so carrying on
       // would advance the cursor past them. Nothing for this target is
@@ -1499,6 +1501,14 @@ export async function processBatch(
             ambiguousWritten: 0,
             driver: dry.driver,
           };
+
+          // D2 (#38): assemble candidate insights from the distilled output.
+          // Pure reshaping — scope comes off the Target the attributor built;
+          // no extra LLM call, nothing persisted (D4) or embedded (D3).
+          candidates = toCandidateInsights({ ...target, accountId: ctx.accountId }, dry, wlog);
+          if (candidates.length > 0) {
+            wlog(`      candidates: ${candidates.length} insight candidate(s) (in-memory — D2)`);
+          }
 
           // Validate every proposed field, drop no-ops + invalids. Same
           // gates production review uses on approve — backfill mirrors
@@ -1602,6 +1612,7 @@ export async function processBatch(
           synthesizedMarkdown: '(distill failed — not proposed or synthesized)',
           synthesizedSensitiveMarkdown: null,
           synthesisMs: 0,
+          candidates,
         };
       }
 
@@ -1641,6 +1652,7 @@ export async function processBatch(
           synthesizedMarkdown: '(proposed for review — synthesis at applyDecisions)',
           synthesizedSensitiveMarkdown: null,
           synthesisMs: 0,
+          candidates,
         };
       }
 
@@ -1788,6 +1800,7 @@ export async function processBatch(
         synthesizedMarkdown,
         synthesizedSensitiveMarkdown,
         synthesisMs,
+        candidates,
       };
     };
 
@@ -1876,6 +1889,7 @@ export async function processBatch(
     accountLevelFiles,
     campaignObsDiscarded,
     synthesized,
+    candidates: synthesized.flatMap((r) => r.candidates),
     stage3Failures,
     ideaStats: ideaCtx?.stats ?? null,
     snapshotWriteFailures,
