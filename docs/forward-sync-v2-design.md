@@ -14,6 +14,14 @@ scan** (run-date stamped), and tallies per-editor edit events — keyed by
 their TRUE event days — into a new `drive_edit_stats` table from the
 same stream.
 
+> **As built (2026-11-19).** `drive_edit_stats.day` holds the run date of the
+> scan that tallied the events (`src/forward/stats.ts`; `scanDate` in
+> `src/forward/run.ts`), not the calendar day of each event, and a seed window
+> stamps its window end. The "true event day" wording in this document is the
+> original intent. Anything that reads the table must treat the day as an
+> upper bound on the edit date, with an error of up to the length of the run
+> window (one forward tick, or up to 30 days for a seed window).
+
 The scan core is untouched — the driver builds `ProcessBatchOptions`
 and hands over batches, exactly like the day-walk driver.
 
