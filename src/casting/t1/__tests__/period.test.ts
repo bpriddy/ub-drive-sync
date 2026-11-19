@@ -67,26 +67,84 @@ describe('folderYearPeriod', () => {
 
 describe('campaignDatePeriod', () => {
   it('needs a start, ignores an end that precedes it', () => {
-    expect(campaignDatePeriod(undefined)).toEqual(NO_PERIOD);
+    expect(campaignDatePeriod(undefined, TODAY)).toEqual(NO_PERIOD);
     expect(
-      campaignDatePeriod({ id: 'c', awardedAt: null, liveAt: null, endsAt: '2024-01-01' }),
+      campaignDatePeriod({ id: 'c', awardedAt: null, liveAt: null, endsAt: '2024-01-01' }, TODAY),
     ).toEqual(NO_PERIOD);
     expect(
-      campaignDatePeriod({
-        id: 'c',
-        awardedAt: '2024-02-01',
-        liveAt: '2024-03-01',
-        endsAt: '2024-09-30',
-      }),
+      campaignDatePeriod(
+        {
+          id: 'c',
+          awardedAt: '2024-02-01',
+          liveAt: '2024-03-01',
+          endsAt: '2024-09-30',
+        },
+        TODAY,
+      ),
     ).toEqual({
       start: '2024-02-01',
       end: '2024-09-30',
       basis: 'campaign_dates',
     });
     expect(
-      campaignDatePeriod({ id: 'c', awardedAt: null, liveAt: '2024-03-01', endsAt: '2024-01-01' })
-        .end,
+      campaignDatePeriod(
+        { id: 'c', awardedAt: null, liveAt: '2024-03-01', endsAt: '2024-01-01' },
+        TODAY,
+      ).end,
     ).toBeNull();
+  });
+});
+
+describe('campaignDatePeriod and the run date', () => {
+  const c = (
+    over: Partial<{ awardedAt: string | null; liveAt: string | null; endsAt: string | null }>,
+  ) => ({
+    id: 'c',
+    awardedAt: null,
+    liveAt: null,
+    endsAt: null,
+    ...over,
+  });
+
+  it('a start after the run date is no period from this source', () => {
+    expect(campaignDatePeriod(c({ awardedAt: '2027-03-01', endsAt: '2027-09-30' }), TODAY)).toEqual(
+      NO_PERIOD,
+    );
+    expect(campaignDatePeriod(c({ liveAt: '2026-11-20' }), TODAY)).toEqual(NO_PERIOD);
+  });
+
+  it('a start exactly on the run date is accepted', () => {
+    expect(campaignDatePeriod(c({ awardedAt: '2026-11-19' }), TODAY)).toEqual({
+      start: '2026-11-19',
+      end: null,
+      basis: 'campaign_dates',
+    });
+  });
+
+  it('a past start with a future end passes the end through unchanged (current behaviour)', () => {
+    expect(campaignDatePeriod(c({ awardedAt: '2026-02-01', endsAt: '2027-06-30' }), TODAY)).toEqual(
+      {
+        start: '2026-02-01',
+        end: '2027-06-30',
+        basis: 'campaign_dates',
+      },
+    );
+  });
+
+  it('a wholly past period is unchanged', () => {
+    expect(
+      campaignDatePeriod(
+        c({ awardedAt: '2024-02-01', liveAt: '2024-03-01', endsAt: '2024-09-30' }),
+        TODAY,
+      ),
+    ).toEqual({ start: '2024-02-01', end: '2024-09-30', basis: 'campaign_dates' });
+  });
+
+  it('is deterministic for a given run date, and the run date decides', () => {
+    const camp = c({ awardedAt: '2027-03-01' });
+    const later = new Date(Date.UTC(2027, 2, 1));
+    expect(campaignDatePeriod(camp, TODAY)).toEqual(campaignDatePeriod(camp, TODAY));
+    expect(campaignDatePeriod(camp, later).basis).toBe('campaign_dates');
   });
 });
 

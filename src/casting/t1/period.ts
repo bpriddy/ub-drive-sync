@@ -112,11 +112,19 @@ export function folderYearPeriod(segments: readonly string[], today: Date): Peri
 
 // ── campaign dates ──────────────────────────────────────────────────────────
 
-/** Awarded (else live) to ends. Needs at least a start; an end before the start is ignored. */
-export function campaignDatePeriod(campaign: CampaignInfo | undefined): Period {
+/**
+ * Awarded (else live) to ends. Needs at least a start; an end before the start
+ * is ignored. A start later than `today` (the run date, injected so re-runs and
+ * tests are deterministic) is a planned campaign, not work that happened: the
+ * source yields no period and the caller falls through to the next one. A start
+ * on `today` itself is accepted. The end is passed through as stored (it may lie
+ * in the future for a running campaign).
+ */
+export function campaignDatePeriod(campaign: CampaignInfo | undefined, today: Date): Period {
   if (!campaign) return NO_PERIOD;
   const start = campaign.awardedAt ?? campaign.liveAt;
   if (start === null) return NO_PERIOD;
+  if (start > isoDate(today)) return NO_PERIOD;
   const end = campaign.endsAt !== null && campaign.endsAt >= start ? campaign.endsAt : null;
   return { start, end, basis: 'campaign_dates' };
 }
