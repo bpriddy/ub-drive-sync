@@ -13,8 +13,11 @@ const MAPPED: Row[] = [
   ['Group Creative Director', 'creative_director', 'director'],
   ['ACD', 'associate_creative_director', 'director'],
   ['Associate Creative Director', 'associate_creative_director', 'director'],
-  ['Art Dir.', 'art_director', 'director'],
-  ['Sr. Art Director', 'art_director', 'director'],
+  ['Art Dir.', 'art_director', null],
+  ['Art Director', 'art_director', null],
+  ['Sr. Art Director', 'art_director', 'senior'],
+  ['Associate Art Director', 'art_director', 'junior'],
+  ['Group Art Director', 'art_director', 'lead'],
   ['Copy', 'copywriter', null],
   ['Copywriter', 'copywriter', null],
   ['Sr. Copywriter', 'copywriter', 'senior'],
@@ -121,6 +124,22 @@ describe('normalizeRole: seniority markers', () => {
       seniority: 'executive',
     });
     expect(normalizeRole('Partner, Strategy').seniority).toBe('executive');
+  });
+
+  it('Art Director is a craft title: Director in it is not a marker', () => {
+    expect(normalizeRole('Art Director').seniority).toBeNull();
+    expect(normalizeRole('Art Dir.').seniority).toBeNull();
+    // Other titles keep the marker.
+    expect(normalizeRole('Design Director').seniority).toBe('director');
+    expect(normalizeRole('Creative Director').seniority).toBe('director');
+    expect(normalizeRole('Associate Creative Director').seniority).toBe('director');
+    expect(normalizeRole('Art Director, Creative Director')).toMatchObject({ roleNorm: 'other' });
+  });
+
+  it('Executive Producer carries no marker; Executive is a marker only in ECD and Executive Director', () => {
+    expect(normalizeRole('Executive Producer').seniority).toBeNull();
+    expect(normalizeRole('Executive Director').seniority).toBe('executive');
+    expect(normalizeRole('Executive Creative Director').seniority).toBe('executive');
   });
 
   it('a bare function carries no marker: Copywriter is not mid-level', () => {
