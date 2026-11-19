@@ -9,7 +9,10 @@
  *  - person: resolveIdentity (staff / quarantined / external_unresolved);
  *    a client-side mention is external_unresolved with reason client_side.
  *  - role: normalizeRole gives role_norm and seniority; the raw string is kept.
- *  - evidence date for the S3 window gate: the end of the parsed work period,
+ *  - period: parsed from the model's text, then limited by the run date (starts after it:
+ *    unknown, ends after it: clamped to it; see period.ts). The row still emits when the
+ *    period is unknown, with NULL period fields;
+ *  - evidence date for the S3 window gate: the end of the (clamped) work period,
  *    else the file's createdTime day (an upper bound of the work date, so the
  *    gate can only be lenient with it, never reject on it wrongly), else none.
  *  - confidence: the name-match strength for a staff row (placeholder until S6
@@ -29,7 +32,7 @@ import {
   type EvidenceDraft,
   type EvidenceRowShape,
 } from './row';
-import { parsePeriod } from './period';
+import { clampToRunDate, parsePeriodText, runDay } from './period';
 import { newCopyCounts, type CopyCounts } from './copies';
 import type { GroundedMention } from './ground';
 import { T3_SOURCE, type T3Candidate } from './types';
@@ -74,7 +77,9 @@ export function mentionsToDrafts(input: ResolveDocInput, counts: ResolveCounts):
   const seen = new Set<string>();
   for (const m of input.mentions) {
     counts.mentions++;
-    const period = parsePeriod(m.periodText, input.now);
+    // What the text says is the claim's identity; what the row stores is limited by the run date.
+    const stated = parsePeriodText(m.periodText, input.now);
+    const period = clampToRunDate(stated, runDay(input.now));
     const evidenceDate = period.end ?? period.start ?? day(input.candidate.createdTime);
     const res = resolveIdentity(
       input.index,
@@ -99,7 +104,9 @@ export function mentionsToDrafts(input: ResolveDocInput, counts: ResolveCounts):
       quote: m.quote,
       extractor_version: input.extractorVersion,
     };
-    const hash = claimHash(base);
+    // Hashed on the stated period, not the clamped one: a clamped end moves with the run
+    // day and would give the same claim a new hash on every later run.
+    const hash = claimHash({ ...base, period_start: stated.start, period_end: stated.end });
     if (seen.has(hash)) {
       counts.duplicateClaims++;
       continue;

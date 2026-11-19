@@ -5,7 +5,12 @@
  * never guessed from a file date).
  *
  * Understood: 2023, 2023-05, 2023-05-14, "May 2023", "Q3 2023", and ranges of
- * those joined by "-", "to", an en dash or "through". Anything else: null.
+ * those joined by "-", "to", an en dash or "through". Anything else (including
+ * fiscal-year forms such as "FY27", which are not calendar years): null.
+ *
+ * Run-date policy (clampToRunDate): a period that starts after the run date is
+ * unknown, one that ends after it is clamped to it. The run date comes from the
+ * run's injected clock (`now`), never from the system clock inside this module.
  */
 
 const MONTHS: Readonly<Record<string, number>> = {
@@ -93,10 +98,20 @@ function point(raw: string, maxYear: number): [string, string] | null {
   return null;
 }
 
-/** `now` bounds the plausible years (a period after next year is a misread). */
-export function parsePeriod(text: string | null, now: Date): Period {
+/**
+ * Years further ahead than this are a misread, not a plan. Parsing stays wide on
+ * purpose: "2025-2028" is a real range whose end the run date clamps.
+ */
+const MAX_YEARS_AHEAD = 5;
+
+/**
+ * The period exactly as the text states it, with no reference to today: the
+ * claim's identity (claim_hash) is computed from this, so it does not move
+ * with the day a run happens.
+ */
+export function parsePeriodText(text: string | null, now: Date): Period {
   if (!text) return NONE;
-  const maxYear = now.getUTCFullYear() + 1;
+  const maxYear = now.getUTCFullYear() + MAX_YEARS_AHEAD;
   const single = point(text, maxYear);
   if (single) return { start: single[0], end: single[1] };
   const parts = text.split(
@@ -107,4 +122,27 @@ export function parsePeriod(text: string | null, now: Date): Period {
   const b = point(parts[1] as string, maxYear);
   if (!a || !b || b[1] < a[0]) return NONE;
   return { start: a[0], end: b[1] };
+}
+
+/** The run date as a calendar day (UTC), from the injected clock value. */
+export const runDay = (now: Date): string => now.toISOString().slice(0, 10);
+
+/**
+ * Work cannot have happened after the run date, so a period read from a
+ * document is limited by it:
+ *  - it starts after the run date (a plan or a deck about a future year): unknown;
+ *  - it ends after the run date: the end is clamped to the run date;
+ *  - if the clamped end is still before the start: unknown (defensive: with the
+ *    first rule applied first this cannot happen for a well-formed period).
+ */
+export function clampToRunDate(p: Period, today: string): Period {
+  if (p.start === null || p.end === null) return NONE;
+  if (p.start > today) return NONE;
+  const end = p.end > today ? today : p.end;
+  return end < p.start ? NONE : { start: p.start, end };
+}
+
+/** Period text to dates, with the run-date policy applied. `now` is the run's injected clock. */
+export function parsePeriod(text: string | null, now: Date): Period {
+  return clampToRunDate(parsePeriodText(text, now), runDay(now));
 }
