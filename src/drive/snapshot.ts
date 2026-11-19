@@ -179,6 +179,19 @@ export interface WriteSnapshotInput {
   skipReason?: string | null;
   /** Set exactly on extracted rows. */
   contentHash?: string | null;
+  /**
+   * Drive's createdTime of the file. Absent: taken from `file.createdTime`,
+   * which every listing and the forward run already carry. A missing or
+   * unparseable value is stored as NULL, never a failed write.
+   */
+  createdTime?: Date | null;
+}
+
+/** A Drive timestamp as a Date, or null when it is missing or not a date. */
+export function toDateOrNull(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 /**
@@ -228,6 +241,14 @@ export function snapshotForScanOutcome(
 
 export async function writeSnapshot(input: WriteSnapshotInput): Promise<void> {
   const { file, scope } = input;
+  // DEPLOY ORDER: `created_time` arrives with gub-schemas 1.23.0 and the
+  // matching GUB/UB migration. Apply that migration BEFORE deploying an image
+  // built against it: the generated client names every column of the model,
+  // so without the column this create (all three writers) fails with P2022.
+  // Rows written before it stay NULL until the catch-up fills them in
+  // (snapshot-refresh.ts, reason created_time_missing); readers must tolerate NULL.
+  const createdTime =
+    input.createdTime !== undefined ? input.createdTime : toDateOrNull(file.createdTime);
   await prisma.driveFileSnapshot.create({
     data: {
       syncRunId: input.syncRunId ?? null,
@@ -238,6 +259,7 @@ export async function writeSnapshot(input: WriteSnapshotInput): Promise<void> {
       name: file.name,
       mimeType: file.mimeType,
       path: file.path,
+      createdTime,
       modifiedTime: file.modifiedTime ? new Date(file.modifiedTime) : null,
       modifiedBy: file.modifiedByEmail,
       sizeBytes: file.size ? BigInt(file.size) : null,

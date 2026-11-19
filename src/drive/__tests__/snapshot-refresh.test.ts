@@ -11,6 +11,7 @@ interface LatestRow {
   path: string | null;
   mimeType: string | null;
   modifiedTime: Date | null;
+  createdTime: Date | null;
   campaignId: string | null;
   syncRunId: string | null;
 }
@@ -126,6 +127,7 @@ function latestOf(file: TraversedFile, over: Partial<LatestSnapshot> = {}): Late
     path: file.path,
     mimeType: file.mimeType,
     modifiedTime: file.modifiedTime ? new Date(file.modifiedTime) : null,
+    createdTime: file.createdTime ? new Date(file.createdTime) : null,
     campaignId: null,
     syncRunId: null,
     ...over,
@@ -161,6 +163,43 @@ describe('snapshotRefreshReason', () => {
     expect(snapshotRefreshReason(file, latestOf(file, { mimeType: 'text/plain' }))).toBe(
       'mime_changed',
     );
+  });
+
+  describe('created_time', () => {
+    const CREATED = '2025-03-04T05:06:07.000Z';
+    const withCreated = f({ id: 'k', createdTime: CREATED });
+
+    it('flags an otherwise current file whose latest row has no created_time', () => {
+      expect(snapshotRefreshReason(withCreated, latestOf(withCreated, { createdTime: null }))).toBe(
+        'created_time_missing',
+      );
+    });
+
+    it('is null once the latest row carries a created_time', () => {
+      expect(snapshotRefreshReason(withCreated, latestOf(withCreated))).toBeNull();
+      expect(
+        snapshotRefreshReason(
+          withCreated,
+          latestOf(withCreated, { createdTime: new Date(CREATED) }),
+        ),
+      ).toBeNull();
+    });
+
+    it('does not select a file whose listing has no usable createdTime (it would repeat forever)', () => {
+      const none = f({ id: 'n', createdTime: null });
+      expect(snapshotRefreshReason(none, latestOf(none, { createdTime: null }))).toBeNull();
+      const bad = f({ id: 'b', createdTime: 'not a date' });
+      expect(snapshotRefreshReason(bad, latestOf(bad, { createdTime: null }))).toBeNull();
+    });
+
+    it('ranks last: any other difference is the reason, and that row carries the created_time too', () => {
+      const stale = latestOf(withCreated, { createdTime: null });
+      expect(snapshotRefreshReason(withCreated, { ...stale, name: 'old.pdf' })).toBe('renamed');
+      expect(snapshotRefreshReason(withCreated, { ...stale, path: 'Acme / Old / k.pdf' })).toBe(
+        'moved',
+      );
+      expect(snapshotRefreshReason(withCreated, undefined)).toBe('unindexed');
+    });
   });
 
   it('treats two missing modified times as equal', () => {
@@ -418,6 +457,7 @@ describe('refreshFileSnapshots', () => {
         path: r['path'] as string,
         mimeType: r['mimeType'] as string,
         modifiedTime: r['modifiedTime'] as Date,
+        createdTime: r['createdTime'] as Date | null,
         campaignId: r['campaignId'] as string | null,
         syncRunId: null,
       });
@@ -463,6 +503,91 @@ describe('refreshFileSnapshots', () => {
 
     expect(res.filesSeen).toBe(1);
     expect(m.db.created.map((r) => r.path)).toEqual(['Acme / Q3 Launch / Fresh Brief.pdf']);
+  });
+
+  describe('the created_time backfill', () => {
+    const CREATED = '2025-03-04T05:06:07.000Z';
+    // Current in every other column; only the first lacks a created_time.
+    const old = f({ id: 'k-old', createdTime: CREATED });
+    const done = f({ id: 'k-done', createdTime: CREATED });
+    const unlisted = f({ id: 'k-unlisted', createdTime: null });
+
+    beforeEach(() => {
+      m.db.latest = [
+        latestOf(old, { createdTime: null }),
+        latestOf(done),
+        latestOf(unlisted, { createdTime: null }),
+      ];
+      m.db.siblings = [];
+      m.listSubtree.mockResolvedValue({
+        files: [old, done, unlisted],
+        folders: [],
+        folderCount: 0,
+        depthCapHits: 0,
+        stats: {},
+      });
+    });
+
+    it('dry-run counts one row for the file that lacks it, and writes nothing', async () => {
+      const res = await refreshFileSnapshots({});
+
+      expect(res).toMatchObject({ confirm: false, filesSeen: 3, rowsPlanned: 1, rowsWritten: 0 });
+      expect(res.byReason).toMatchObject({ created_time_missing: 1, unindexed: 0, modified: 0 });
+      expect(m.db.created).toEqual([]);
+      expect(output()).toContain('created_time_missing 1');
+    });
+
+    it('with --confirm writes one index_refresh row carrying the created_time', async () => {
+      const res = await refreshFileSnapshots({ confirm: true });
+
+      expect(res).toMatchObject({ rowsPlanned: 1, rowsWritten: 1, writeFailures: 0 });
+      expect(m.db.created).toHaveLength(1);
+      // The ordinary listing-only skip_reason: checkDelta and the unchanged-content
+      // gate ignore exactly that value, so this row cannot pose as an extraction.
+      expect(m.db.created[0]).toMatchObject({
+        fileId: 'k-old',
+        wasExtracted: false,
+        skipReason: 'index_refresh',
+        syncRunId: null,
+        contentHash: null,
+        createdTime: new Date(CREATED),
+        // The other columns repeat what the listing shows.
+        name: old.name,
+        path: old.path,
+        modifiedTime: new Date(old.modifiedTime!),
+      });
+    });
+
+    it('is idempotent: once the new row is the latest, a second run writes nothing', async () => {
+      await refreshFileSnapshots({ confirm: true });
+      const row = m.db.created[0]!;
+      m.db.latest = m.db.latest.map((r) =>
+        r.fileId === 'k-old' ? { ...r, createdTime: row['createdTime'] as Date } : r,
+      );
+      m.db.created = [];
+
+      const res = await refreshFileSnapshots({ confirm: true });
+
+      expect(res.rowsPlanned).toBe(0);
+      expect(m.db.created).toEqual([]);
+    });
+
+    it('costs no extra row for a file that is also renamed: that one row carries the created_time', async () => {
+      m.db.latest = [latestOf(old, { createdTime: null, name: 'Old Name.pdf' })];
+      m.listSubtree.mockResolvedValue({
+        files: [old],
+        folders: [],
+        folderCount: 0,
+        depthCapHits: 0,
+        stats: {},
+      });
+
+      const res = await refreshFileSnapshots({ confirm: true });
+
+      expect(res.byReason).toMatchObject({ renamed: 1, created_time_missing: 0 });
+      expect(m.db.created).toHaveLength(1);
+      expect(m.db.created[0]).toMatchObject({ createdTime: new Date(CREATED) });
+    });
   });
 
   describe('which listing', () => {
