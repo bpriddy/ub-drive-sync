@@ -7,7 +7,11 @@ export interface RosterEntry {
   readonly email: string | null;
   /** Preferred names, maiden names, spelling variants. Matched as full names. */
   readonly aliases?: readonly string[] | undefined;
-  readonly startedAt: string;
+  /**
+   * null, or a date listed in `RosterIndexOptions.unknownStartDates`, means the start date is
+   * unknown: the window gate is not evaluated for this row (no left cut).
+   */
+  readonly startedAt: string | null;
   /** Not used as a gate (endedAt is empty for former staff); kept for callers. */
   readonly endedAt?: string | null | undefined;
   readonly isActive: boolean;
@@ -29,6 +33,14 @@ export interface RosterIndexOptions {
    */
   readonly agencyEmailDomains?: readonly string[] | undefined;
   readonly knownExternals?: readonly KnownExternal[] | undefined;
+  /**
+   * ISO dates (YYYY-MM-DD) that the caller knows are technical placeholders in
+   * `startedAt` (for example a mass-import day), not real hire dates. A roster row
+   * whose startedAt equals one of them is treated like a NULL start: the window gate
+   * is not evaluated for it. The module hard-codes no such date; the caller passes it.
+   * Default: none.
+   */
+  readonly unknownStartDates?: readonly string[] | undefined;
 }
 
 /** What the caller has about one raw mention. Never carries ids. */
@@ -54,7 +66,11 @@ export interface ResolutionContext {
     | undefined;
 }
 
-/** Strongest first. The first seven can resolve; `fuzzy` and `partial` only generate candidates. */
+/**
+ * Candidate tiers, strongest first, then `active_preferred`, which is a decision
+ * outcome and never a candidate tier. `fuzzy` and `partial` only generate
+ * candidates and can never resolve.
+ */
 export const MATCH_METHODS = [
   'email',
   'name_exact',
@@ -65,6 +81,7 @@ export const MATCH_METHODS = [
   'initial',
   'fuzzy',
   'partial',
+  'active_preferred',
 ] as const;
 export type MatchMethod = (typeof MATCH_METHODS)[number];
 
@@ -83,9 +100,20 @@ export const MATCH_STRENGTH: Readonly<Record<MatchMethod, number>> = {
   initial: 0.6,
   fuzzy: 0.4,
   partial: 0.3,
+  /** An exact name shared by one active and some inactive people: the active one. [ASSUME: value] */
+  active_preferred: 0.7,
 };
 
-export const RESOLVABLE_METHODS: ReadonlySet<MatchMethod> = new Set(MATCH_METHODS.slice(0, 7));
+export const RESOLVABLE_METHODS: ReadonlySet<MatchMethod> = new Set<MatchMethod>([
+  'email',
+  'name_exact',
+  'alias',
+  'name_first_last',
+  'translit',
+  'nickname',
+  'initial',
+  'active_preferred',
+]);
 
 export type QuarantineReason =
   | 'ambiguous_name'
@@ -117,6 +145,11 @@ export interface StaffResolution {
   readonly gates: { readonly window: GateState; readonly account: GateState };
   /** Candidates of the deciding tier removed by a gate (the survivor was the only one left). */
   readonly excludedByGate: number;
+  /**
+   * Present only for `active_preferred`: the inactive people who share the exact name,
+   * kept as hints for fusion (S6). Never a second decision.
+   */
+  readonly candidateStaffIds?: readonly string[] | undefined;
 }
 
 export interface QuarantinedResolution {
