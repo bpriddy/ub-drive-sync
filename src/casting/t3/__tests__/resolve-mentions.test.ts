@@ -124,4 +124,64 @@ describe('mentionsToDrafts', () => {
     const gated = run([m({ rawName: 'Sam Ashworth', periodText: '2023' })]);
     expect(gated.drafts[0]?.row.person_kind).not.toBe('staff');
   });
+
+  it('a period in the future is unknown: the row is still emitted with NULL period, and the gate falls back to createdTime', () => {
+    // staff-07 started 2021-01-11. File created in 2019, text claims 2027.
+    const old = { ...doc, createdTime: '2019-06-01T00:00:00Z' };
+    const counts = newResolveCounts();
+    const drafts = mentionsToDrafts(
+      {
+        candidate: old,
+        docType: 'plan',
+        mentions: [m({ rawName: 'Yuriy Kovalenko', rawRole: 'Producer', periodText: '2027' })],
+        index,
+        extractorVersion: 'v',
+        now: NOW,
+      },
+      counts,
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.row).toMatchObject({ period_start: null, period_end: null });
+    // the future date no longer reaches the gate: the 2019 file date does, and gates the person
+    expect(drafts[0]?.row.person_kind).toBe('quarantined');
+    expect(counts.byReason).toEqual({ window_gate: 1 });
+  });
+
+  it('a range spanning the present is stored clamped to the run date, and the gate sees the clamped end', () => {
+    const { drafts } = run([
+      m({ rawName: 'Yuriy Kovalenko', rawRole: 'Producer', periodText: '2018 - 2030' }),
+    ]);
+    expect(drafts[0]?.row).toMatchObject({
+      person_kind: 'staff',
+      period_start: '2018-01-01',
+      period_end: '2026-11-19',
+    });
+  });
+
+  it('claim_hash does not move with the run day (it is built on the stated period)', () => {
+    const at = (iso: string, text: string) => {
+      const counts = newResolveCounts();
+      return mentionsToDrafts(
+        {
+          candidate: doc,
+          docType: 'x',
+          mentions: [m({ rawName: 'Alexander Voronin', rawRole: 'Producer', periodText: text })],
+          index,
+          extractorVersion: 'v',
+          now: new Date(iso),
+        },
+        counts,
+      )[0]?.row;
+    };
+    const day1 = at('2026-11-19T00:00:00Z', '2025-2028');
+    const day2 = at('2026-12-24T00:00:00Z', '2025-2028');
+    expect(day1?.period_end).toBe('2026-11-19');
+    expect(day2?.period_end).toBe('2026-12-24');
+    expect(day1?.claim_hash).toBe(day2?.claim_hash);
+    const f1 = at('2026-11-19T00:00:00Z', '2027');
+    const f2 = at('2027-03-01T00:00:00Z', '2027');
+    expect(f1?.period_start).toBeNull();
+    expect(f2?.period_start).toBe('2027-01-01');
+    expect(f1?.claim_hash).toBe(f2?.claim_hash);
+  });
 });
