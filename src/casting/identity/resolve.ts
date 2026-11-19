@@ -195,7 +195,7 @@ interface GateOutcome {
   readonly passing: number[];
   readonly failedWindow: number[];
   readonly failedAccount: number[];
-  readonly window: GateState;
+  readonly evidenceDay: number | null;
   readonly account: GateState;
 }
 
@@ -215,7 +215,11 @@ function applyGates(
   const failedAccount: number[] = [];
   for (const idx of candidates) {
     const s = index.staff[idx] as IndexedStaff;
-    if (evidenceDay !== null && evidenceDay < s.startDay - index.startToleranceDays) {
+    if (
+      evidenceDay !== null &&
+      s.startDay !== null &&
+      evidenceDay < s.startDay - index.startToleranceDays
+    ) {
       failedWindow.push(idx);
     } else if (linked !== undefined && !linked.has(s.entry.staffId)) {
       failedAccount.push(idx);
@@ -227,7 +231,7 @@ function applyGates(
     passing,
     failedWindow,
     failedAccount,
-    window: evidenceDay === null ? 'not_evaluated' : 'passed',
+    evidenceDay,
     account: linked === undefined ? 'not_evaluated' : 'passed',
   };
 }
@@ -239,6 +243,8 @@ function toStaff(
   gates: GateOutcome,
 ): IdentityResolution {
   const s = index.staff[idx] as IndexedStaff;
+  const windowState: GateState =
+    gates.evidenceDay === null || s.startDay === null ? 'not_evaluated' : 'passed';
   return {
     personKind: 'staff',
     staffId: s.entry.staffId,
@@ -246,7 +252,7 @@ function toStaff(
     method,
     strength: MATCH_STRENGTH[method],
     staffIsActive: s.entry.isActive,
-    gates: { window: gates.window, account: gates.account },
+    gates: { window: windowState, account: gates.account },
     excludedByGate: gates.failedWindow.length + gates.failedAccount.length,
   };
 }
@@ -279,6 +285,20 @@ function decide(
     );
   }
   if (gates.passing.length > 1) {
+    // Exact-name tiers only: one active person against inactive namesakes is the active one.
+    // Two or more active, or only inactive, stays ambiguous. Never applied to weaker tiers.
+    if (method === 'name_exact' || method === 'alias') {
+      const active = gates.passing.filter((i) => (index.staff[i] as IndexedStaff).entry.isActive);
+      if (active.length === 1) {
+        const hints = gates.passing
+          .filter((i) => i !== active[0])
+          .map((i) => (index.staff[i] as IndexedStaff).entry.staffId);
+        return {
+          ...toStaff(index, active[0] as number, 'active_preferred', gates),
+          candidateStaffIds: hints.slice(0, MAX_REPORTED_CANDIDATES),
+        } as IdentityResolution;
+      }
+    }
     return quarantined(index, 'ambiguous_name', gates.passing, method);
   }
   return toStaff(index, gates.passing[0] as number, method, gates);
@@ -294,8 +314,12 @@ function decide(
  *  3. names: the STRONGEST tier that has any candidate decides, lower tiers are
  *     ignored, so a failed exact match is never replaced by a lookalike;
  *  4. gates remove candidates of that tier; zero left = quarantined, two or more
- *     left = quarantined (ambiguous), exactly one left = staff;
- *  5. fuzzy and partial tiers can only quarantine;
+ *     left = quarantined (ambiguous), exactly one left = staff. One exception, at the
+ *     exact-name tiers only: when exactly one of several namesakes is active, the
+ *     result is that person with method `active_preferred` and the inactive namesakes
+ *     in `candidateStaffIds` as hints (inactive-only and several-active stay ambiguous);
+ *  5. fuzzy and partial tiers can only quarantine, and a quarantined row always
+ *     carries its candidate ids as corroboration hints for fusion (S6);
  *  6. a known external with the same name makes a staff hit a quarantine.
  */
 export function resolveIdentity(

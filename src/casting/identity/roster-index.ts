@@ -14,8 +14,8 @@ type Multi = Map<string, Set<number>>;
 export interface IndexedStaff {
   readonly entry: RosterEntry;
   readonly forms: NameForms;
-  /** Days since epoch of startedAt. */
-  readonly startDay: number;
+  /** Days since epoch of startedAt; null = unknown start (window gate not evaluated). */
+  readonly startDay: number | null;
   readonly fullKeys: readonly string[];
 }
 
@@ -66,12 +66,18 @@ function externalKeys(ext: KnownExternal): string[] {
 
 /**
  * Builds the lookup structure once per roster snapshot. Throws on a malformed
- * startedAt: that is a caller bug, not data to guess around.
+ * startedAt (a null or an `unknownStartDates` value is allowed): that is a caller
+ * bug, not data to guess around.
  */
 export function buildRosterIndex(
   entries: readonly RosterEntry[],
   options: RosterIndexOptions = {},
 ): RosterIndex {
+  const unknownStarts = new Set<string>();
+  for (const d of options.unknownStartDates ?? []) {
+    if (isoDay(d) === null) throw new RangeError(`unknownStartDates: "${d}" is not YYYY-MM-DD`);
+    unknownStarts.add(d);
+  }
   const staff: IndexedStaff[] = [];
   const byEmail: Multi = new Map();
   const exact: Multi = new Map();
@@ -84,9 +90,12 @@ export function buildRosterIndex(
 
   for (const entry of entries) {
     if (!entry.isPerson) continue;
-    const startDay = isoDay(entry.startedAt);
-    if (startDay === null) {
-      throw new RangeError(`roster entry ${entry.staffId}: startedAt is not YYYY-MM-DD`);
+    let startDay: number | null = null;
+    if (entry.startedAt !== null && !unknownStarts.has(entry.startedAt.slice(0, 10))) {
+      startDay = isoDay(entry.startedAt);
+      if (startDay === null) {
+        throw new RangeError(`roster entry ${entry.staffId}: startedAt is not YYYY-MM-DD`);
+      }
     }
     const forms = normalizeName(entry.fullName);
     const idx = staff.length;
