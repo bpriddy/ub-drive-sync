@@ -81,6 +81,32 @@ describe('dry-run (the default)', () => {
   });
 });
 
+describe('index row choice counters', () => {
+  it('counts account-rooted, legacy-path-only, pair-campaign and unused newer rows apart', async () => {
+    const files = scenarioFiles();
+    files[0] = { ...files[0]!, campaignFromPair: true };
+    files[1] = { ...files[1]!, accountRooted: false };
+    files[2] = { ...files[2]!, newerRowOtherRun: true };
+    const report = await runT1(deps({ index: new MemoryIndex(files) }), options());
+    expect(report.accounts[0]!.index).toEqual({
+      accountRooted: 12,
+      legacyPathOnly: 1,
+      campaignFromPair: 1,
+      newerRowOtherRun: 1,
+    });
+  });
+
+  it('a dry-run of the plain scenario reports every file as account-rooted', async () => {
+    const report = await runT1(deps(), options());
+    expect(report.accounts[0]!.index).toEqual({
+      accountRooted: 13,
+      legacyPathOnly: 0,
+      campaignFromPair: 0,
+      newerRowOtherRun: 0,
+    });
+  });
+});
+
 describe('apply', () => {
   it('writes through the writer under a sync run, with project references and the window applied', async () => {
     const writer = new MemoryWriter();

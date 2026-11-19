@@ -83,6 +83,16 @@ export interface AccountReport {
   /** Usable modified years of the index files, for the census reconcile; `unknown` = missing or placeholder. */
   filesByModifiedYear: Record<string, number>;
   prefixes: number;
+  /** How the index rows used were chosen (see PgIndexReader). */
+  index: {
+    accountRooted: number;
+    /** Only legacy campaign-rooted rows exist for the file: newest row of any kind used. */
+    legacyPathOnly: number;
+    /** campaignId taken from the same-run legacy row. */
+    campaignFromPair: number;
+    /** A newer row of another run was left unused. */
+    newerRowOtherRun: number;
+  };
   projects: {
     total: number;
     byStrength: Record<string, number>;
@@ -140,6 +150,7 @@ function newAccountReport(accountId: string): AccountReport {
     filesSeen: 0,
     filesByModifiedYear: {},
     prefixes: 0,
+    index: { accountRooted: 0, legacyPathOnly: 0, campaignFromPair: 0, newerRowOtherRun: 0 },
     projects: { total: 0, byStrength: {}, byPeriodBasis: {}, outOfWindow: 0, campaignConflicts: 0 },
     skipped: { not_content: 0, no_modifier: 0, no_project: 0, out_of_window: 0 },
     rows: { emitted: 0, byPersonKind: {}, byStrength: {}, byPeriodYear: {}, unresolvedShare: null },
@@ -222,6 +233,10 @@ export async function runT1(deps: T1Deps, options: T1Options): Promise<T1Report>
         for (const f of page) {
           if (!isNotContent(f)) builder.add(f, deriveProjectContext(f, ctxOptions));
           report.filesSeen += 1;
+          if (f.accountRooted) report.index.accountRooted += 1;
+          else report.index.legacyPathOnly += 1;
+          if (f.campaignFromPair) report.index.campaignFromPair += 1;
+          if (f.newerRowOtherRun) report.index.newerRowOtherRun += 1;
           const d = usableDate(f.modifiedTime, options.today);
           bump(report.filesByModifiedYear, d === null ? 'unknown' : String(d.getUTCFullYear()));
         }

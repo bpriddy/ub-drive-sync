@@ -46,29 +46,32 @@ const row = (n: number): EvidenceInsertRow => ({
   quote: null,
   confidence: 0.3,
   withheldReason: n % 2 ? null : 'unresolved',
-  extractorVersion: 't1-metadata-v1',
+  extractorVersion: 't1-metadata-v2',
   syncRunId: 'b0000000-0000-4000-8000-000000000002',
   claimHash: `h${n}`,
 });
 
 describe('PgIndexReader', () => {
-  it('reads the latest row per file, keyset-paged, without touching created_time', async () => {
+  it('reads one chosen row per file, keyset-paged, without touching created_time', async () => {
     const { db, calls } = fakeDb([[{ fileId: 'f1' }]]);
     const out = await new PgIndexReader(db).readPage(ACCOUNT, 'f0', 500);
     expect(out).toEqual([{ fileId: 'f1' }]);
     const sql = calls[0]!;
-    expect(sql.sql).toMatch(/DISTINCT ON \(file_id\)/);
-    expect(sql.sql).toMatch(/ORDER BY file_id, scanned_at DESC/);
+    expect(sql.sql).toMatch(/GROUP BY file_id\s+ORDER BY file_id\s+LIMIT/);
+    expect(sql.sql).toMatch(/CROSS JOIN LATERAL/);
+    expect(sql.sql).toMatch(/s\.sync_run_id IS NULL OR s\.campaign_id IS NULL/);
     expect(sql.sql).toMatch(/file_id > /);
     expect(sql.sql).not.toMatch(/created_time/);
     expect(sql.sql).not.toMatch(/SELECT \*/);
-    expect(sql.values).toEqual([ACCOUNT, 'f0', 500]);
+    // The id page is parameterised first: account, cursor, limit. The rest is the account again.
+    expect(sql.values.slice(0, 3)).toEqual([ACCOUNT, 'f0', 500]);
+    expect(sql.values.slice(3).every((v) => v === ACCOUNT)).toBe(true);
   });
 
   it('starts from the beginning with an empty cursor', async () => {
     const { db, calls } = fakeDb();
     await new PgIndexReader(db).readPage(ACCOUNT, null, 10);
-    expect(calls[0]!.values).toEqual([ACCOUNT, '', 10]);
+    expect(calls[0]!.values.slice(0, 3)).toEqual([ACCOUNT, '', 10]);
   });
 });
 

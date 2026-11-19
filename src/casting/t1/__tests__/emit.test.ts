@@ -47,7 +47,7 @@ describe('emitPresenceRow', () => {
       jobNumber: 'ACME55000216',
       periodStart: '2025-01-01',
       periodEnd: '2025-12-31',
-      extractorVersion: 't1-metadata-v1',
+      extractorVersion: 't1-metadata-v2',
       syncRunId: 'run-x',
     });
   });

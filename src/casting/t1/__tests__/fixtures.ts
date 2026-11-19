@@ -38,6 +38,9 @@ export function file(over: Partial<IndexFileRow> & { path: string }): IndexFileR
     mimeType: 'application/pdf',
     modifiedTime: new Date('2025-04-10T10:00:00Z'),
     modifiedBy: null,
+    accountRooted: true,
+    campaignFromPair: false,
+    newerRowOtherRun: false,
     ...over,
   };
 }

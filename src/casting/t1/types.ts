@@ -21,7 +21,7 @@ export type PersonKind = (typeof PERSON_KINDS)[number];
 export type WithheldReason = (typeof WITHHELD_REASONS)[number];
 
 /** Written into `extractor_version`. A change of derivation rules bumps it (new rows, old rows purgeable). */
-export const T1_EXTRACTOR_VERSION = 't1-metadata-v1';
+export const T1_EXTRACTOR_VERSION = 't1-metadata-v2';
 /** `sync_runs.source` of an apply run. [VERIFY: no CHECK on sync_runs.source in the GUB migrations read.] */
 export const T1_SYNC_SOURCE = 'casting_t1';
 
@@ -65,12 +65,22 @@ export interface IndexFileRow {
   modifiedTime: Date | null;
   /** Email of Drive's lastModifyingUser; null on a large share of files (rises with age). */
   modifiedBy: string | null;
+  /**
+   * false = the file has only legacy v1 campaign-scan rows (path rooted at the
+   * campaign's name, not the real folders): the row used is the newest of any
+   * kind and its path is of poor value. See PgIndexReader.
+   */
+  accountRooted: boolean;
+  /** campaignId was taken from the newest row of the same v1 run (the account row has none). */
+  campaignFromPair: boolean;
+  /** A newer row of ANOTHER run exists that was not used (its modifier and path are ignored). */
+  newerRowOtherRun: boolean;
 }
 
 /**
- * Reads the file index. Implementations return the LATEST row per file of one
- * account, ordered by file id, strictly after `afterFileId`, at most `limit`
- * rows. Keyset paging keeps every query small (80k-file ceiling, 300 s cap).
+ * Reads the file index. Implementations return ONE row per file of one
+ * account (the newest account-rooted row, see PgIndexReader), ordered by file
+ * id, strictly after `afterFileId`, at most `limit` rows. Keyset paging keeps every query small (80k-file ceiling, 300 s cap).
  */
 export interface IndexReader {
   readPage(accountId: string, afterFileId: string | null, limit: number): Promise<IndexFileRow[]>;
