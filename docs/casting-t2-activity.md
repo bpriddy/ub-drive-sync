@@ -56,29 +56,82 @@ Dry-run reads only tables that exist today. `--apply` needs the UB migration tha
 creates `evidence` (gub-schemas 1.23.0): before it, apply fails with Postgres
 42P01 on purpose. Apply the migration to the environment, then run.
 
-## Ops step, separate from this stage: widening the Activity seed
+## Ops step, separate from this stage: Activity edit-stats backfill
 
-NOT part of this change and not run by it. Today `seed-edit-stats` covers about
-one year back in 30-day windows, writes each window under a random run id (a
-second seed over overlapping windows double-counts) and dates rows by the
-window end. To reach the real horizon (drive age) an ops step needs a new,
-reviewed mode of its own. Outline:
+Code: `src/casting/t2/backfill/` (own entrypoint `main.js`; not wired into
+`src/main.ts`; nothing in `src/forward/` was changed). Implemented, NOT run. It
+writes `drive_edit_stats` from Drive Activity, so it needs the user's separate go.
 
-1. `seed-edit-stats --account-id X --from YYYY-MM-DD --to YYYY-MM-DD
-[--window-days N] [--confirm]`; without `--confirm` it only lists the windows
-   and the number of Activity API calls it would make (dry-run is the default).
-2. Idempotent: the synthetic run id of a window is deterministic (a hash of
-   account, from, to), so a re-run replaces exactly its own rows
-   (`writeRunEditStats` already replaces by run id).
-3. Resumable: windows run oldest to newest and commit one at a time; a re-run
-   skips nothing and repeats nothing wrongly, since each window replaces itself.
-4. `--to` is the start of the earliest existing seed window, so no event is
-   counted twice at the boundary.
-5. Smaller windows (for example 7 days [ASSUME]) give a tighter date bound for
-   the same evidence, at proportionally more calls.
-6. Estimate: Activity calls = windows x (1 + extra result pages); for an
-   account whose seed starts about 14 months ago and whose drive is 2.4 years
-   old, about 15 windows of 30 days or about 64 of 7 days (derived from those
-   two ages), pages per window [MEASURE: dry-run]. People API calls = new
-   distinct unresolved actors the cache lacks [MEASURE: dry-run], by the
-   directory bot, paced.
+```
+node dist/src/casting/t2/backfill/main.js --account-id <uuid> --from YYYY-MM-DD --to YYYY-MM-DD \
+  [--window-days N] [--confirm] [--resume-run-id <uuid> --confirm]
+  [--budget-seconds N] [--max-calls N] [--existing-window-days N]
+```
+
+- **Dry-run by default.** It reads the existing edit-stats run ids and the
+  account's Drive root, then prints the windows (index, start, end, day, run id),
+  the overlap verdict and the call estimate. No Drive, People or model call, no
+  write, no `sync_runs` row. `--confirm` is required to fetch and write.
+- **Windows** are contiguous, oldest to newest, half-open (start, end] at
+  00:00:00Z; the last one may be shorter. `--window-days` is 1 to 30, default 30.
+- **Run id per window** is a deterministic name-based UUID over account and window
+  bounds. The writer is the existing `writeRunEditStats`, which deletes every row
+  of a run id and re-creates it in one transaction, so a retry replaces only its
+  own rows and cannot double anything.
+- **One commit per window**, progress in a `sync_runs` row (source
+  `drive_edit_stats_backfill`, checkpoint = next window; resume with
+  `--resume-run-id`). `--budget-seconds` and `--max-calls` stop after the window
+  that crosses the budget (never after the last one) and exit with code 75; exit 1
+  is a failure or an overlap refusal. `--max-calls` counts the calls the Activity
+  adapter reports; the client pages internally, so the adapter reports
+  `max(1, ceil(events / 500))` per window, a proxy rather than an exact count.
+- **Dates.** `drive_edit_stats.day` is run-date framing: the rows of a backfilled
+  window are dated by the window END, as the seed does. T2 reads months, so an
+  edit can land in the month of the window end instead of its own: the error is
+  up to the window length. The default 30 is the cheapest; 7 tightens the bound
+  to a week at about 4x the windows (15 vs 64 for a 450-day range, derived from
+  the ages above) and so about 4x the calls. Recommended: 7 when the evidence
+  month matters, 30 for a first coverage pass.
+- **Calls.** `windows x (1 + extraPagesPerWindow)`, one Activity page holds up to
+  500 activities. Extra pages per window are unknown until windows are fetched
+  `[MEASURE: first confirmed windows]`; the dry-run prints the floor (one call per
+  window) and `[ASSUME]` scenarios only. People API calls: 0, always.
+
+### Overlap protection (a hard error)
+
+`drive_edit_stats` is keyed by (sync_run_id, file_id, actor_email) and readers sum
+rows across run ids. The existing `seed-edit-stats` gives each of its windows a
+RANDOM run id, so a second seed over windows that overlap an earlier one (or a
+forward run) replaces nothing: it adds a second copy of the same events and every
+counter doubles. The table does not record which time range a run covered.
+
+The backfill reads every run id of the account through an injected reader and
+refuses, before anything else (in dry-run too), any planned window that
+intersects an existing run. An existing run covers (minDay - span, maxDay], where
+`span` is the longest window it can have: 30 days by default (the existing seed's
+window and this command's cap), `--existing-window-days` lowers it for earlier
+backfills run with shorter windows. The only exemptions are the plan's own run
+ids (retry and resume). Consequently `--to` must not be later than the start of
+the earliest existing seed window: the earliest existing day minus the span; the
+refusal message prints that date. A gap of under one day can stay uncovered at
+that edge (old windows start at a time of day, new ones at 00:00:00Z): that
+undercounts, it never double-counts. A second backfill over the same range with a
+different `--window-days` is refused for the same reason.
+
+### Actors
+
+The backfill never calls the People API. It maps `people/<id>` through the
+`people_resource_map` cache and otherwise stores the raw resource, exactly as
+`writeRunEditStats` does. Resolution happens later in existing code:
+`src/forward/people.ts` (`resolveActors`, directory bot, People API), called by
+the forward driver and by `seed-edit-stats` for the actors of the window they
+process; the T2 stage then reads the cache at emission time, so an actor resolved
+later is emitted by the next T2 run. Actors that appear only in backfilled
+history stay `people/<id>` until something resolves them: a cache-filling pass
+over the unresolved resources is a further ops step that is not built.
+
+### Estimate for planning
+
+For an account whose seed starts about 14 months ago and whose drive is 2.4 years
+old: about 450 uncovered days, so about 15 windows of 30 days or 64 of 7
+(floor: one call per window), extra pages `[MEASURE: first confirmed windows]`.
