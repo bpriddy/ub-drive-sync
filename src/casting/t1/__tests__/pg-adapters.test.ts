@@ -46,7 +46,7 @@ const row = (n: number): EvidenceInsertRow => ({
   quote: null,
   confidence: 0.3,
   withheldReason: n % 2 ? null : 'unresolved',
-  extractorVersion: 't1-metadata-v1',
+  extractorVersion: 't1-metadata-v2',
   syncRunId: 'b0000000-0000-4000-8000-000000000002',
   claimHash: `h${n}`,
 });

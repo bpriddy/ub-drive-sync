@@ -21,7 +21,7 @@ export type PersonKind = (typeof PERSON_KINDS)[number];
 export type WithheldReason = (typeof WITHHELD_REASONS)[number];
 
 /** Written into `extractor_version`. A change of derivation rules bumps it (new rows, old rows purgeable). */
-export const T1_EXTRACTOR_VERSION = 't1-metadata-v1';
+export const T1_EXTRACTOR_VERSION = 't1-metadata-v2';
 /** `sync_runs.source` of an apply run. [VERIFY: no CHECK on sync_runs.source in the GUB migrations read.] */
 export const T1_SYNC_SOURCE = 'casting_t1';
 
