@@ -161,6 +161,13 @@ export interface Selection {
   readonly excluded: Readonly<Record<ExclusionReason, number>>;
   /** Files dropped as duplicates: dropped id -> kept id (audit; never sent, never a row). */
   readonly duplicateOf: ReadonlyMap<string, string>;
+  /**
+   * Identical-content copies (same md5, different file) of each KEPT file, by
+   * kept file id. They are never sent to the model; the stage binds the kept
+   * file's mentions to each of them (see copies.ts). Version families are NOT
+   * here: a different-content older version is only dropped.
+   */
+  readonly copiesOf: ReadonlyMap<string, readonly SelectedCandidate[]>;
   readonly tierCounts: Readonly<Record<Exclude<TriageTier, 'X'>, number>>;
 }
 
@@ -233,25 +240,26 @@ export function selectCandidates(
   }
 
   const duplicateOf = new Map<string, string>();
+  const copiesOf = new Map<string, SelectedCandidate[]>();
   let kept = passed;
   if (policy.collapseDuplicates !== false) {
-    kept = collapse(
-      passed,
-      (s) => (s.candidate.md5Checksum ? `${s.candidate.md5Checksum}` : null),
-      {
-        reason: 'duplicate_md5',
-        excluded,
-        duplicateOf,
-      },
-    );
-    kept = collapse(kept, (s) => versionFamilyKey(s.candidate), {
+    // Version families first (same folder, different content, newest wins), then
+    // identical-content copies among the survivors: a copy in another folder is a
+    // different project's file and is kept as a copy to expand, never lost.
+    kept = collapse(passed, (s) => versionFamilyKey(s.candidate), {
       reason: 'duplicate_version_family',
       excluded,
       duplicateOf,
     });
+    kept = collapse(kept, (s) => (s.candidate.md5Checksum ? `${s.candidate.md5Checksum}` : null), {
+      reason: 'duplicate_md5',
+      excluded,
+      duplicateOf,
+      copiesOf,
+    });
   }
 
-  // A file dropped in the md5 pass may point at one the family pass dropped later.
+  // A file dropped in the family pass may point at one the md5 pass dropped later.
   for (const [dropped, first] of duplicateOf) {
     let end = first;
     while (duplicateOf.has(end)) end = duplicateOf.get(end) as string;
@@ -268,7 +276,7 @@ export function selectCandidates(
           : 0),
   );
   for (const s of selected) tierCounts[s.tier]++;
-  return { selected, excluded, duplicateOf, tierCounts };
+  return { selected, excluded, duplicateOf, copiesOf, tierCounts };
 }
 
 function collapse(
@@ -278,6 +286,7 @@ function collapse(
     reason: 'duplicate_md5' | 'duplicate_version_family';
     excluded: Record<ExclusionReason, number>;
     duplicateOf: Map<string, string>;
+    copiesOf?: Map<string, SelectedCandidate[]>;
   },
 ): SelectedCandidate[] {
   const winners = new Map<string, SelectedCandidate>();
@@ -297,6 +306,11 @@ function collapse(
     }
     sink.excluded[sink.reason]++;
     sink.duplicateOf.set(s.candidate.fileId, winner.candidate.fileId);
+    if (sink.copiesOf) {
+      const list = sink.copiesOf.get(winner.candidate.fileId) ?? [];
+      list.push(s);
+      sink.copiesOf.set(winner.candidate.fileId, list);
+    }
   }
   return out;
 }

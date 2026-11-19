@@ -330,7 +330,7 @@ describe('apply with a fake model', () => {
     );
   });
 
-  it('sends identical content once and records the copy as skipped', async () => {
+  it('sends identical content once and records the copy as a copy, not a skip', async () => {
     const llm = new FakeLlm(() => DECK_ANSWER());
     const copy = cand({
       fileId: 'file-copy',
@@ -341,8 +341,16 @@ describe('apply with a fake model', () => {
     const { deps, ledger } = setup(llm, { 'file-deck': CREDITS_DECK, 'file-copy': CREDITS_DECK });
     const report = await runT3(applyOpts(), deps, [DECK, copy]);
     expect(llm.calls).toHaveLength(1);
-    expect(report.run).toMatchObject({ attempted: 1, ok: 1, skipped: 1 });
-    expect(ledger.records.find((r) => r.status === 'skipped')?.reason).toBe('duplicate_content');
+    expect(report.run).toMatchObject({ attempted: 1, ok: 1, skipped: 0 });
+    const line = ledger.records.find((r) => r.status === 'copy');
+    expect(line?.reason).toBe('content_copy');
+    expect(line?.copyOfCellKey).toBe(ledger.records.find((r) => r.status === 'ok')?.cellKey);
+    // file ids sort 'file-copy' first, so it is the kept file; the deck is the copy and has context
+    expect(report.run?.copies).toMatchObject({
+      foundAtReadTime: 1,
+      expanded: 1,
+      copy_without_context: 0,
+    });
   });
 
   it('retries one invalid answer once, bills both attempts, and counts the retry', async () => {

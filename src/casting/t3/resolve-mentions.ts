@@ -30,6 +30,7 @@ import {
   type EvidenceRowShape,
 } from './row';
 import { parsePeriod } from './period';
+import { newCopyCounts, type CopyCounts } from './copies';
 import type { GroundedMention } from './ground';
 import { T3_SOURCE, type T3Candidate } from './types';
 
@@ -39,6 +40,8 @@ export interface ResolveCounts {
   byKind: Record<'staff' | 'external_unresolved' | 'quarantined', number>;
   /** Count per resolver reason (quarantine or external reason), e.g. window_gate, client_side. */
   byReason: Record<string, number>;
+  /** Identical-content copies that received rows (no model call, $0). */
+  copies: CopyCounts;
 }
 
 export const newResolveCounts = (): ResolveCounts => ({
@@ -46,6 +49,7 @@ export const newResolveCounts = (): ResolveCounts => ({
   duplicateClaims: 0,
   byKind: { staff: 0, external_unresolved: 0, quarantined: 0 },
   byReason: {},
+  copies: newCopyCounts(),
 });
 
 export interface ResolveDocInput {
