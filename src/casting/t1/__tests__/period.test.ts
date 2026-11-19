@@ -121,13 +121,36 @@ describe('campaignDatePeriod and the run date', () => {
     });
   });
 
-  it('a past start with a future end passes the end through unchanged (current behaviour)', () => {
+  it('a future end is clamped to the run date', () => {
     expect(campaignDatePeriod(c({ awardedAt: '2026-02-01', endsAt: '2027-06-30' }), TODAY)).toEqual(
       {
         start: '2026-02-01',
-        end: '2027-06-30',
+        end: '2026-11-19',
         basis: 'campaign_dates',
       },
+    );
+  });
+
+  it('an end exactly on the run date is unchanged; a past end is unchanged', () => {
+    expect(
+      campaignDatePeriod(c({ awardedAt: '2026-02-01', endsAt: '2026-11-19' }), TODAY).end,
+    ).toBe('2026-11-19');
+    expect(
+      campaignDatePeriod(c({ awardedAt: '2026-02-01', endsAt: '2026-11-18' }), TODAY).end,
+    ).toBe('2026-11-18');
+  });
+
+  it('a start on the run date with a future end is a one-day period', () => {
+    expect(campaignDatePeriod(c({ liveAt: '2026-11-19', endsAt: '2027-01-01' }), TODAY)).toEqual({
+      start: '2026-11-19',
+      end: '2026-11-19',
+      basis: 'campaign_dates',
+    });
+  });
+
+  it('a start in the future is still no period, whatever the end', () => {
+    expect(campaignDatePeriod(c({ awardedAt: '2027-03-01', endsAt: '2027-09-30' }), TODAY)).toEqual(
+      NO_PERIOD,
     );
   });
 
