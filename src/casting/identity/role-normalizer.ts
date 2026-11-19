@@ -9,8 +9,8 @@
  *    of the function: "Senior Zookeeper" is ('other', 'senior'); "Copywriter" is
  *    ('copywriter', null). Several markers: the highest wins.
  *
- * The marker table follows the approved vocabulary note, including its
- * consequences (for example "Art Director" carries the marker "Director").
+ * The marker table follows the approved vocabulary note, with one ruling on top:
+ * "Art Director" does not carry the marker "Director" (see CRAFT_TITLE).
  */
 import type { RoleNorm, Seniority } from './vocab';
 
@@ -126,8 +126,17 @@ const MARKERS: readonly (readonly [Seniority, RegExp])[] = [
   ['junior', /\b(junior|assistant|coordinator|intern|associate(?! creative director))\b/],
 ];
 
+/**
+ * "Art Director" is a craft title, not a leadership one: the word Director in it
+ * is not a marker (ruling 2026-11-19). Other markers in the same title still count
+ * ("Sr. Art Director" is senior, "Associate Art Director" is junior, "Group Art
+ * Director" is lead). Design Director, Creative Director and the rest keep Director.
+ */
+const CRAFT_TITLE = /\bart director\b/g;
+
 function seniorityOf(prepared: string): Seniority | null {
-  for (const [level, re] of MARKERS) if (re.test(prepared)) return level;
+  const text = prepared.replace(CRAFT_TITLE, ' ');
+  for (const [level, re] of MARKERS) if (re.test(text)) return level;
   return null;
 }
 
