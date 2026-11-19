@@ -86,4 +86,49 @@ describe('SkeletonBuilder', () => {
     expect(straddle.outOfWindow).toBe(false);
     expect(straddle.period).toMatchObject({ start: WINDOW_START, end: '2021-12-31' });
   });
+
+  describe('future-dated campaign falls through the ladder', () => {
+    const FUTURE = {
+      campaigns: [{ id: 'camp-f', awardedAt: '2027-03-01', liveAt: null, endsAt: '2027-09-30' }],
+      pieces: [],
+    };
+    const dated = (n: number, path: string) =>
+      Array.from({ length: n }, (_, i) =>
+        file({
+          path,
+          campaignId: 'camp-f',
+          modifiedTime: new Date(`2025-0${(i % 4) + 1}-10T00:00:00Z`),
+        }),
+      );
+
+    it('goes to the file-date window when there are enough dated files', () => {
+      const p = build(dated(10, 'R / Brand F / x.pdf'), FUTURE).get('campaign:camp-f')!;
+      expect(p.period.basis).toBe('file_dates');
+      expect(p.period.start! < '2027-01-01').toBe(true);
+    });
+
+    it('ends in no period when there is nothing else', () => {
+      const p = build(dated(3, 'R / Brand F / x.pdf'), FUTURE).get('campaign:camp-f')!;
+      expect(p.period).toMatchObject({ start: null, end: null, basis: 'none' });
+    });
+
+    it('a coded project in that campaign takes folder years before anything else', () => {
+      const files = dated(10, 'R / 2025 / A [ACME55000400] / x.pdf');
+      const p = build(files, FUTURE).get('job:ACME55000400')!;
+      expect(p.period).toMatchObject({ start: '2025-01-01', basis: 'folder_year' });
+    });
+
+    it('a campaign with a past period still wins over the file window', () => {
+      const past = {
+        campaigns: [{ id: 'camp-f', awardedAt: '2024-02-01', liveAt: null, endsAt: '2024-09-30' }],
+        pieces: [],
+      };
+      const p = build(dated(10, 'R / Brand F / x.pdf'), past).get('campaign:camp-f')!;
+      expect(p.period).toMatchObject({
+        start: '2024-02-01',
+        end: '2024-09-30',
+        basis: 'campaign_dates',
+      });
+    });
+  });
 });

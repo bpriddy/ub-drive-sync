@@ -138,7 +138,7 @@ export class SkeletonBuilder {
       if (state.strength !== 'campaign')
         period = folderYearPeriod(state.segments, this.options.today);
       if (period.basis === 'none' && campaignId !== null) {
-        period = campaignDatePeriod(campaignById.get(campaignId));
+        period = campaignDatePeriod(campaignById.get(campaignId), this.options.today);
       }
       if (period.basis === 'none') period = state.hist.window();
 
