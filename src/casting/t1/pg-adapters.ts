@@ -44,13 +44,52 @@ const isoDay = (d: Date | null): string | null =>
 
 // ── file index ──────────────────────────────────────────────────────────────
 
+/**
+ * Which index row stands for a file.
+ *
+ * The index is append-only and v1 wrote TWO rows per file in a campaign folder
+ * per run: the account scan's (path rooted at the account, `campaign_id` NULL)
+ * and, written after it, the campaign scan's (path rooted at the campaign's
+ * NAME, `campaign_id` set). The campaign row is the newest, so "newest row"
+ * shows T1 a path without the real folders and hides the job codes in them.
+ *
+ * Rule (the code's own definition, `isLegacyCampaignRow` in
+ * src/drive/snapshot-refresh.ts and the `path` / `sync_run_id` / `campaign_id`
+ * rows of docs/drive-file-index.md): a row is a LEGACY CAMPAIGN-ROOTED row iff
+ * `sync_run_id IS NOT NULL AND campaign_id IS NOT NULL`. Every other row is
+ * account-rooted: v1 account scans (campaign_id NULL), v2 scan-core rows and
+ * catch-up rows (sync_run_id NULL, whatever their campaign attribution).
+ *
+ * Per file, the CHOSEN row is the newest account-rooted row; a file with none
+ * falls back to its newest row of any kind (`accountRooted = false`, counted as
+ * legacy_path_only). Ties on scanned_at break by id, so the choice is stable.
+ *
+ * Columns:
+ *   - path, name, mime_type, modified_time, modified_by come from the chosen
+ *     row ALONE. They must describe one snapshot of the file: the path has to
+ *     end in the name, and a newer modifier next to an older path could pair a
+ *     person with a folder the file no longer sits in. In a v1 pair both rows
+ *     come from the same run, so nothing is lost; when a newer row of another
+ *     run exists and is not used, `newerRowOtherRun` says so.
+ *   - campaign_id comes from the chosen row; when that is NULL (a v1 account
+ *     scan) it is taken from the newest campaign-scan row of the SAME v1 run
+ *     (`campaignFromPair`): the (file, run) pairing the catch-up uses, and the
+ *     campaign scan's attribution of the same listing. A campaign row of
+ *     another run is not used.
+ *
+ * Known holes, both of the kind the docs already describe, counted by the ops
+ * queries in the report rather than guessed around: a campaign deleted since
+ * v1 nulls `campaign_id`, and a deleted v1 run nulls `sync_run_id`; the rows
+ * then no longer look campaign-rooted.
+ */
 export class PgIndexReader implements IndexReader {
   constructor(private readonly db: RawClient) {}
 
   /**
-   * Latest row per file of one account, keyset-paged by file id. Uses the
-   * (file_id, scanned_at DESC) index. `created_time` is not selected: T1 does
-   * not use it (not a project date), so the read also works before the migration.
+   * Keyset-paged by file id: one bounded id page first, then two LATERAL
+   * lookups per id on the (file_id, scanned_at DESC) index. `created_time` is
+   * not selected: T1 does not use it (not a project date), so the read also
+   * works before the migration.
    */
   async readPage(
     accountId: string,
@@ -59,20 +98,60 @@ export class PgIndexReader implements IndexReader {
   ): Promise<IndexFileRow[]> {
     const after = afterFileId ?? '';
     return this.db.$queryRaw<IndexFileRow[]>(Prisma.sql`
-      SELECT DISTINCT ON (file_id)
-             file_id        AS "fileId",
-             account_id     AS "accountId",
-             campaign_id    AS "campaignId",
-             name,
-             mime_type      AS "mimeType",
-             path,
-             modified_time  AS "modifiedTime",
-             modified_by    AS "modifiedBy"
-        FROM drive_file_snapshots
-       WHERE account_id = ${accountId}::uuid
-         AND file_id > ${after}
-       ORDER BY file_id, scanned_at DESC
-       LIMIT ${limit}
+      WITH ids AS (
+        SELECT file_id
+          FROM drive_file_snapshots
+         WHERE account_id = ${accountId}::uuid
+           AND file_id > ${after}
+         GROUP BY file_id
+         ORDER BY file_id
+         LIMIT ${limit}
+      )
+      SELECT ids.file_id        AS "fileId",
+             ${accountId}::uuid AS "accountId",
+             COALESCE(c.campaign_id, p.campaign_id) AS "campaignId",
+             c.name,
+             c.mime_type        AS "mimeType",
+             c.path,
+             c.modified_time    AS "modifiedTime",
+             c.modified_by      AS "modifiedBy",
+             (c.sync_run_id IS NULL OR c.campaign_id IS NULL) AS "accountRooted",
+             (c.campaign_id IS NULL AND p.campaign_id IS NOT NULL) AS "campaignFromPair",
+             (n.scanned_at > c.scanned_at
+                AND n.sync_run_id IS DISTINCT FROM c.sync_run_id)
+                                AS "newerRowOtherRun"
+        FROM ids
+       CROSS JOIN LATERAL (
+              SELECT s.name, s.mime_type, s.path, s.modified_time, s.modified_by,
+                     s.campaign_id, s.sync_run_id, s.scanned_at
+                FROM drive_file_snapshots s
+               WHERE s.file_id = ids.file_id
+                 AND s.account_id = ${accountId}::uuid
+               ORDER BY (s.sync_run_id IS NULL OR s.campaign_id IS NULL) DESC,
+                        s.scanned_at DESC, s.id DESC
+               LIMIT 1
+             ) c
+        LEFT JOIN LATERAL (
+              SELECT s.campaign_id
+                FROM drive_file_snapshots s
+               WHERE c.campaign_id IS NULL
+                 AND c.sync_run_id IS NOT NULL
+                 AND s.file_id = ids.file_id
+                 AND s.account_id = ${accountId}::uuid
+                 AND s.sync_run_id = c.sync_run_id
+                 AND s.campaign_id IS NOT NULL
+               ORDER BY s.scanned_at DESC, s.id DESC
+               LIMIT 1
+             ) p ON true
+       CROSS JOIN LATERAL (
+              SELECT s.sync_run_id, s.scanned_at
+                FROM drive_file_snapshots s
+               WHERE s.file_id = ids.file_id
+                 AND s.account_id = ${accountId}::uuid
+               ORDER BY s.scanned_at DESC, s.id DESC
+               LIMIT 1
+             ) n
+       ORDER BY ids.file_id
     `);
   }
 }
