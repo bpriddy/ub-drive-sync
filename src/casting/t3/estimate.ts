@@ -57,6 +57,11 @@ export interface EstimateInput {
   /** One entry per planned cell: its approximate extracted length, or undefined when unmeasured. */
   readonly cellChars: readonly (number | undefined)[];
   readonly fallbackChars?: number | undefined;
+  /**
+   * Identical-content copies that will receive rows from a cell's extraction.
+   * They add rows, not model calls: reported as expanded at $0, never priced.
+   */
+  readonly expandedCopies?: number | undefined;
 }
 
 export interface Estimate {
@@ -66,6 +71,9 @@ export interface Estimate {
   readonly tokensIn: number;
   readonly tokensOut: number;
   readonly costUsd: number;
+  /** Copies expanded without a model call. */
+  readonly expandedCopies: number;
+  readonly expandedCostUsd: 0;
 }
 
 export function estimate(model: string, input: EstimateInput, a: CostAssumptions): Estimate | null {
@@ -91,6 +99,8 @@ export function estimate(model: string, input: EstimateInput, a: CostAssumptions
     tokensIn: Math.round(tokensIn * a.retryFactor),
     tokensOut: Math.round(tokensOut * a.retryFactor),
     costUsd: Math.round(cost * 100) / 100,
+    expandedCopies: input.expandedCopies ?? 0,
+    expandedCostUsd: 0,
   };
 }
 

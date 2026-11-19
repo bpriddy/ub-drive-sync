@@ -12,6 +12,8 @@ export type { T3Args } from './args';
 export { formatProposal } from './proposal';
 export { selectCandidates, triage, TRIAGE_VARIANTS } from './triage';
 export type { Selection, SelectionPolicy, TriageVariant } from './triage';
+export { COPIES_PER_KEPT_CAP, decideCopies, hasProjectContext } from './copies';
+export type { CopyRef } from './copies';
 export { estimate, estimateAll, ASSUMPTION_PRESETS } from './estimate';
 export { JsonlLedger, MemoryLedger, cellKeyOf, extractorVersionOf } from './ledger';
 export type { CellRecord, Ledger } from './ledger';

@@ -30,8 +30,13 @@ export interface CellRecord {
   /** Configuration the cell ran under (see extractorVersionOf). */
   readonly extractorVersion: string;
   readonly at: string;
-  readonly status: 'ok' | 'failed' | 'skipped';
-  /** Why failed or skipped. */
+  /**
+   * `copy`: an identical-content copy of another cell's file. It was not sent to
+   * the model; `copyOfCellKey` names the kept cell whose mentions it receives.
+   * These lines are the recorded kept -> copies mapping a resumed run expands.
+   */
+  readonly status: 'ok' | 'failed' | 'skipped' | 'copy';
+  /** Why failed, skipped or recorded as a copy. */
   readonly reason: string | null;
   readonly candidate: Pick<T3Candidate, 'fileId' | 'accountId' | 'createdTime' | 'projectRef'>;
   readonly docClass: DocClass;
@@ -44,6 +49,8 @@ export interface CellRecord {
   readonly mentions: readonly GroundedMention[];
   readonly sanitizeStats: SanitizeStats | null;
   readonly groundingStats: GroundingStats | null;
+  /** Set on `copy` lines only: the cell key of the kept file. */
+  readonly copyOfCellKey?: string;
 }
 
 export interface Ledger {
@@ -76,6 +83,14 @@ export function cellKeyOf(
         sig.capChars,
       ]),
     )
+    .digest('hex');
+}
+
+/** Key of a copy line for an md5 copy (runtime copies use their own cell key). */
+export function copyCellKeyOf(keptCellKey: string, copyFileId: string): string {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(['copy', keptCellKey, copyFileId]))
     .digest('hex');
 }
 

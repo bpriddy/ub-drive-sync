@@ -1,7 +1,8 @@
 /**
  * The T3 stage runner: plan, dry-run, apply.
  *
- *   plan     triage -> window / drive rules -> duplicate collapse -> cells
+ *   plan     triage -> window / drive rules -> duplicate collapse -> cells; identical-content
+ *            copies are set aside as copies of a kept file (see copies.ts)
  *   dry-run  (default) the plan, the estimate, and a $0 resolve preview of any
  *            cells already in the ledger. No model, no sink writes, no files.
  *            `readText` additionally reads documents (zero-cost reads) to size
@@ -23,10 +24,20 @@ import crypto from 'node:crypto';
 import type { LlmDriver } from '../../ai/ai.types';
 import type { ThinkingLevelName } from '../../ai/thinking';
 import type { ResolutionContext, RosterIndex } from '../identity';
+import {
+  addDecision,
+  breakdownOf,
+  buildCopyIndex,
+  copyRefOf,
+  decideCopies,
+  newCopyCounts,
+  type CopyEdge,
+} from './copies';
 import { estimateAll, type EstimateTable } from './estimate';
 import { groundMentions, type GroundingStats } from './ground';
 import {
   cellKeyOf,
+  copyCellKeyOf,
   extractorVersionOf,
   type CellConfigSignature,
   type CellRecord,
@@ -134,6 +145,22 @@ export interface T3Plan {
   readonly duplicatesCollapsed: number;
   readonly cellsAlreadyDone: number;
   readonly cellsToRun: number;
+  /** Documents the model will read: one per unique content. */
+  readonly documentsToRead: number;
+  /**
+   * Identical-content copies that receive rows without a model call ($0). `expanded` is
+   * over every selected file, `expandedForCellsToRun` only for cells still to run.
+   * Rows to be emitted = rows of (documentsToRead + expandedForCellsToRun) documents;
+   * mentions per document is [MEASURE: pilot].
+   */
+  readonly copies: {
+    readonly candidates: number;
+    readonly expanded: number;
+    readonly expandedForCellsToRun: number;
+    readonly copy_without_context: number;
+    readonly overCap: number;
+    readonly byAccountClass: readonly { accountId: string; docClass: string; expanded: number }[];
+  };
   /** dry-run with readText: documents the reader could not read, by reason. */
   readonly readSkips: Readonly<Record<string, number>>;
   readonly extractorVersion: string;
@@ -161,6 +188,16 @@ export interface T3Report {
     readonly rowsDuplicate: number;
     readonly usage: TagUsage[];
     readonly costUsd: number;
+    /** Copies expanded without a model call, reported apart from the priced calls. */
+    readonly copies: {
+      readonly expanded: number;
+      readonly copy_without_context: number;
+      readonly overCap: number;
+      readonly rows: number;
+      readonly foundAtReadTime: number;
+      readonly costUsd: 0;
+      readonly byAccountClass: readonly { accountId: string; docClass: string; expanded: number }[];
+    };
     /** The driver's own per-attempt tally for this tag (billed attempts incl. its retries). */
     readonly driverAttempts: ReturnType<typeof llmUsageByTag>;
     readonly syncRunId: string;
@@ -231,6 +268,7 @@ export async function runT3(
     if (
       r.status === 'ok' ||
       r.status === 'skipped' ||
+      r.status === 'copy' ||
       (r.status === 'failed' && opts.retryFailed !== true)
     ) {
       doneKeys.add(r.cellKey);
@@ -260,7 +298,31 @@ export async function runT3(
   const sizeOf = (s: SelectedCandidate): number | undefined =>
     measured.get(s.candidate.fileId) ?? s.candidate.approxChars;
   const sizing = todo.filter((s) => !unreadable.has(s.candidate.fileId)).map(sizeOf);
-  const estimates = estimateAll({ cellChars: sizing, fallbackChars: opts.fallbackChars });
+
+  const selectionEdges: CopyEdge[] = [];
+  for (const s of selection.selected) {
+    for (const c of selection.copiesOf.get(s.candidate.fileId) ?? []) {
+      selectionEdges.push({ keptCellKey: keyOf(s), ref: copyRefOf(c.candidate, c.docClass) });
+    }
+  }
+  const planIndex = buildCopyIndex(prior, selectionEdges);
+  const planCopies = newCopyCounts();
+  const todoCopies = newCopyCounts();
+  const todoKeys = new Set(todo.map(keyOf));
+  let copyCandidates = 0;
+  for (const s of selection.selected) {
+    const refs = planIndex.get(keyOf(s)) ?? [];
+    const d = decideCopies(s.candidate.fileId, refs);
+    copyCandidates += d.expand.length + d.withoutContext.length + d.overCap.length;
+    addDecision(planCopies, d);
+    if (todoKeys.has(keyOf(s))) addDecision(todoCopies, d);
+  }
+
+  const estimates = estimateAll({
+    cellChars: sizing,
+    fallbackChars: opts.fallbackChars,
+    expandedCopies: todoCopies.expanded,
+  });
 
   const plan: T3Plan = {
     windowStart: opts.policy.windowStart,
@@ -272,6 +334,15 @@ export async function runT3(
     duplicatesCollapsed: selection.duplicateOf.size,
     cellsAlreadyDone,
     cellsToRun: todo.length,
+    documentsToRead: todo.length,
+    copies: {
+      candidates: copyCandidates,
+      expanded: planCopies.expanded,
+      expandedForCellsToRun: todoCopies.expanded,
+      copy_without_context: planCopies.copy_without_context,
+      overCap: planCopies.overCap,
+      byAccountClass: breakdownOf(planCopies.byAccountClass),
+    },
     readSkips,
     extractorVersion,
   };
@@ -290,21 +361,45 @@ export async function runT3(
     counts: ResolveCounts,
   ): EvidenceDraft[] => {
     const drafts: EvidenceDraft[] = [];
+    const index = buildCopyIndex(records, selectionEdges);
     for (const rec of latestOk(records, selectedKeys)) {
+      const common = {
+        docType: rec.docType ?? 'other',
+        mentions: rec.mentions,
+        index: deps.roster,
+        extractorVersion: rec.extractorVersion,
+        now,
+      };
       drafts.push(
         ...mentionsToDrafts(
           {
+            ...common,
             candidate: rec.candidate,
-            docType: rec.docType ?? 'other',
-            mentions: rec.mentions,
-            index: deps.roster,
             context: deps.contextFor?.(rec.candidate.accountId),
-            extractorVersion: rec.extractorVersion,
-            now,
           },
           counts,
         ),
       );
+      // Identical-content copies: the kept file's mentions, the copy's own file and context.
+      const decision = decideCopies(rec.candidate.fileId, index.get(rec.cellKey) ?? []);
+      addDecision(counts.copies, decision);
+      for (const copy of decision.expand) {
+        const rows = mentionsToDrafts(
+          {
+            ...common,
+            candidate: {
+              fileId: copy.fileId,
+              accountId: copy.accountId,
+              createdTime: copy.createdTime,
+              projectRef: copy.projectRef,
+            },
+            context: deps.contextFor?.(copy.accountId),
+          },
+          counts,
+        );
+        counts.copies.rows += rows.length;
+        drafts.push(...rows);
+      }
     }
     return drafts;
   };
@@ -324,14 +419,46 @@ export async function runT3(
   }
   const llm = await deps.llmFactory();
   const { syncRunId } = await deps.sink.startRun({ extractorVersion });
+  // Record the kept -> copies mapping (md5 copies) so a resumed run expands the same set.
+  for (const e of selectionEdges) {
+    const key = copyCellKeyOf(e.keptCellKey, e.ref.fileId);
+    if (doneKeys.has(key)) continue;
+    doneKeys.add(key);
+    deps.ledger.append({
+      v: 1,
+      cellKey: key,
+      extractorVersion,
+      at: new Date().toISOString(),
+      status: 'copy',
+      reason: 'md5_copy',
+      copyOfCellKey: e.keptCellKey,
+      candidate: {
+        fileId: e.ref.fileId,
+        accountId: e.ref.accountId,
+        createdTime: e.ref.createdTime,
+        projectRef: e.ref.projectRef,
+      },
+      docClass: e.ref.docClass,
+      contentHash: null,
+      docType: null,
+      truncated: false,
+      sentChars: null,
+      attempts: 0,
+      usage: null,
+      mentions: [],
+      sanitizeStats: null,
+      groundingStats: null,
+    });
+  }
   const tally = new UsageTally();
   const quality = zeroQuality();
   const claimedHashes = new Map<string, string>();
   for (const r of prior) {
     if (r.status === 'ok' && r.contentHash && r.extractorVersion === extractorVersion) {
-      claimedHashes.set(r.contentHash, r.candidate.fileId);
+      claimedHashes.set(r.contentHash, r.cellKey);
     }
   }
+  let foundAtReadTime = 0;
   let attempted = 0,
     ok = 0,
     failed = 0,
@@ -397,11 +524,18 @@ export async function runT3(
     const contentHash = sha(text);
     const first = claimedHashes.get(contentHash);
     if (first !== undefined) {
-      skipped++;
-      record(s, { status: 'skipped', reason: 'duplicate_content', contentHash });
+      // Same content already sent (or sent in an earlier run): no model call. The file is
+      // recorded as a copy of that cell and receives its mentions at the resolve step.
+      foundAtReadTime++;
+      record(s, {
+        status: 'copy',
+        reason: 'content_copy',
+        contentHash,
+        copyOfCellKey: first,
+      });
       return;
     }
-    claimedHashes.set(contentHash, s.candidate.fileId);
+    claimedHashes.set(contentHash, keyOf(s));
 
     const fit = fitToCap(text, s.docClass, cap);
     if (fit.truncated) quality.truncatedDocs++;
@@ -528,6 +662,15 @@ export async function runT3(
       rowsDuplicate,
       usage: tally.snapshot(),
       costUsd: Math.round(tally.totalCostUsd * 10_000) / 10_000,
+      copies: {
+        expanded: resolveCounts.copies.expanded,
+        copy_without_context: resolveCounts.copies.copy_without_context,
+        overCap: resolveCounts.copies.overCap,
+        rows: resolveCounts.copies.rows,
+        foundAtReadTime,
+        costUsd: 0,
+        byAccountClass: breakdownOf(resolveCounts.copies.byAccountClass),
+      },
       driverAttempts: llmUsageByTag().filter((u) => u.tag === T3_CALL_TAG),
       syncRunId,
     },
