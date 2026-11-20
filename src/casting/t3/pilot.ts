@@ -68,6 +68,17 @@ export type { LedgerHeader };
 /** Process exit codes. A dry-run exits 3 on purpose: "printed, nothing started". */
 export const PILOT_EXIT = { ok: 0, failed: 1, refused: 2, dryRun: 3, stopped: 4 } as const;
 
+/** What the apply preview knows, handed to `PilotIo.beforeApply`. Counts and money only. */
+export interface BeforeApplyInfo {
+  /** The cell count the PROPOSAL printed (the sample; cells already in a resumed ledger included). */
+  readonly cells: number;
+  readonly model: string;
+  /** Base estimate for the arm that will run; null when the model has no price. */
+  readonly baseCostUsd: number | null;
+  /** False when some cells could not be sized (the estimate is incomplete). */
+  readonly baseComplete: boolean;
+}
+
 export interface PilotIo {
   loadCandidates(accountId: string): Promise<readonly T3Candidate[]>;
   /** `unknownStartDates` is the pilot's roster option (empty = none); it never reaches a model call. */
@@ -78,6 +89,12 @@ export interface PilotIo {
   makeLlm(): Promise<LlmDriver>;
   /** Called only in apply. */
   makeSink(): T3Sink;
+  /**
+   * Optional caller guard (the `casting-run` orchestrator). Called only in apply, after the
+   * PROPOSAL and every guard of this driver, before the ledger header is written and before any
+   * model client exists. Throw a GuardError to refuse: nothing is started. Absent = no extra guard.
+   */
+  beforeApply?(info: BeforeApplyInfo): void | Promise<void>;
   /** Opens (and creates) the JSONL ledger. Called only for an existing directory in dry-run. */
   openLedger(dir: string): Ledger;
   /** The checkout and the working directory: a ledger inside either is refused. */
@@ -408,7 +425,16 @@ export async function runPilot(args: PilotArgs, io: PilotIo): Promise<PilotOutco
     return { exitCode: PILOT_EXIT.dryRun, sample, selection, preview, applied: null };
   }
 
-  // ---- apply: every guard has passed; header first, then the stage ----
+  // ---- apply: every guard has passed; the caller's guard, then header, then the stage ----
+  if (io.beforeApply) {
+    const armBase = preview.estimates.find((e) => e.model === args.model)?.base;
+    await io.beforeApply({
+      cells: sample.fileIds.length,
+      model: args.model,
+      baseCostUsd: armBase ? armBase.costUsd : null,
+      baseComplete: armBase ? armBase.complete : false,
+    });
+  }
   const approval = args.approval as NonNullable<PilotArgs['approval']>;
   const target = dir as string;
   if (dirState.state !== 'resumable') {

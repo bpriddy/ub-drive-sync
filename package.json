@@ -18,6 +18,7 @@
     "clear": "tsx -r dotenv/config scripts/clear.ts",
     "merge-campaign-dupes": "tsx -r dotenv/config src/main.ts merge-campaign-dupes",
     "backfill-pending": "tsx -r dotenv/config src/main.ts backfill-pending",
+    "casting-run": "tsx -r dotenv/config src/casting/run-all/main.ts",
     "probe-activity": "tsx -r dotenv/config scripts/probe-activity.ts",
     "probe-file-history": "tsx -r dotenv/config scripts/probe-file-history.ts",
     "probe-edited-files": "tsx -r dotenv/config scripts/probe-edited-files.ts",
