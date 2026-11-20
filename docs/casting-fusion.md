@@ -71,19 +71,23 @@ the serving layer must read one version only.
 - Recency is not in the formula. Older years are labelled `not_validated`
   (undated, or no T2 evidence behind the claim), never hidden below the threshold.
 
-## Incompatible role pairs (proposal)
+## Incompatible role pairs
 
 An explicit short list in `constants.ts`, no role families. Conservative on purpose:
 a small agency legitimately combines neighbouring crafts (strategist and copywriter,
 art director and designer, copywriter and art director), so only combinations from
-opposite ends of the agency are listed. To be edited by the Casting contact.
+opposite ends of the agency are listed. Two pairs, set by the Casting contact
+(2026-11-20).
 
-| Pair                                                | Why one person does not hold both on one project                    |
-| --------------------------------------------------- | ------------------------------------------------------------------- |
-| `finance` + `creative_director`                     | budget control and creative leadership are opposite seats           |
-| `finance` + `account_director`                      | finance reviews what the client lead commits; independent by design |
-| `executive_creative_director` + `account_executive` | top of the creative ladder and the junior client-service seat       |
-| `account_director` + `art_director`                 | client lead and hands-on craft are different jobs on one project    |
+| Pair                                                | Why one person does not hold both on one project              |
+| --------------------------------------------------- | ------------------------------------------------------------- |
+| `finance` + `creative_director`                     | budget control and creative leadership are opposite seats     |
+| `executive_creative_director` + `account_executive` | top of the creative ladder and the junior client-service seat |
+
+`finance` + `account_director` and `account_director` + `art_director` were
+considered and deliberately left out, as were `strategist` + `copywriter`,
+`art_director` + `designer` and `copywriter` + `art_director`: a person holding
+both of these on one project is legitimate and stays served.
 
 ## Validation label (one definition, shared with serving)
 

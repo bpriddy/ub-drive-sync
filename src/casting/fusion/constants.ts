@@ -108,14 +108,13 @@ export type IncompatibleRolePair = readonly [RoleNorm, RoleNorm];
  * An explicit short list, not role families, and deliberately conservative: a small
  * agency legitimately combines neighbouring crafts (strategist and copywriter,
  * art director and designer), so only combinations from opposite ends of the
- * agency are listed. PROPOSAL, to be edited by the Casting contact; the
- * reasons are in docs/casting-fusion.md. Order inside a pair does not matter.
+ * agency are listed. Two pairs, set by the Casting contact 2026-11-20;
+ * finance + account_director and account_director + art_director were considered
+ * and deliberately left out. Reasons are in docs/casting-fusion.md. Order inside a pair does not matter.
  */
 export const INCOMPATIBLE_ROLE_PAIRS: readonly IncompatibleRolePair[] = [
   ['finance', 'creative_director'],
-  ['finance', 'account_director'],
   ['executive_creative_director', 'account_executive'],
-  ['account_director', 'art_director'],
 ];
 
 // ── Storage ─────────────────────────────────────────────────────────────────
