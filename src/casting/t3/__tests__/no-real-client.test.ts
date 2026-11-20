@@ -17,6 +17,13 @@
  * each only through a dynamic import inside a lazy factory. The pilot core (pilot.ts,
  * pilot-args.ts, sample.ts, listing-candidates.ts) stays hermetic and is held to the
  * unchanged rules below.
+ *
+ * The ledger loader (load-main.ts, with pg-sink.ts and real-pilot-io.ts behind it) is a second
+ * DELIBERATE extension, and a narrower one: it reads the staff roster and writes Layer 1 rows,
+ * so it may load Prisma (`pg-sink.ts` imports `@prisma/client`; `load-main.ts` imports the
+ * `prisma` singleton lazily) and `real-pilot-io.ts` (roster only), but it must never reach the
+ * model client, the genai SDK, `real-llm.ts`, `real-reader.ts` or Drive. The loader core
+ * (load.ts, load-args.ts) stays hermetic. See the "ledger loader" blocks below.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -60,8 +67,15 @@ describe('static: who may reach the client, config or the extractor', () => {
       .filter((s) => /\bimport\(/.test(codeOf(s.text)))
       .map((s) => s.file)
       .sort();
-    // pilot-main.ts and real-pilot-io.ts: the deliberate allow-list extension for pilot P1.
-    expect(hits).toEqual(['pilot-main.ts', 'real-llm.ts', 'real-pilot-io.ts', 'real-reader.ts']);
+    // pilot-main.ts and real-pilot-io.ts: the deliberate allow-list extension for pilot P1;
+    // load-main.ts: the ledger loader's (roster and Prisma sink only, never a model).
+    expect(hits).toEqual([
+      'load-main.ts',
+      'pilot-main.ts',
+      'real-llm.ts',
+      'real-pilot-io.ts',
+      'real-reader.ts',
+    ]);
   });
 
   it('nobody imports the real wiring statically, and only the pilot entry point names it', () => {
@@ -70,7 +84,9 @@ describe('static: who may reach the client, config or the extractor', () => {
       .map((s) => s.file)
       .sort();
     // run.ts and the index only mention them in comments, which codeOf strips.
-    expect(named).toEqual(['pilot-main.ts']);
+    // load-main.ts names real-pilot-io only (the roster); the loader-specific block below
+    // holds it to never naming real-llm or real-reader.
+    expect(named).toEqual(['load-main.ts', 'pilot-main.ts']);
     for (const s of sources) {
       expect(codeOf(s.text), s.file).not.toMatch(/^import[^;]*from '\.\/real-/m);
     }
@@ -101,11 +117,14 @@ describe('static: who may reach the client, config or the extractor', () => {
 
   it('every non-test source file imports only relative modules or an allowlist of packages', () => {
     const allowed = new Set(['@google/genai', 'zod', 'node:crypto', 'node:fs', 'node:path']);
+    // The one deliberate addition for the ledger loader: the Postgres sink talks to Prisma.
+    const perFile: Record<string, readonly string[]> = { 'pg-sink.ts': ['@prisma/client'] };
     for (const s of sources) {
       for (const m of codeOf(s.text).matchAll(/from '([^']+)'/g)) {
         const spec = m[1] as string;
         if (spec.startsWith('.')) continue;
-        expect(allowed.has(spec), `${s.file} imports ${spec}`).toBe(true);
+        const ok = allowed.has(spec) || (perFile[s.file] ?? []).includes(spec);
+        expect(ok, `${s.file} imports ${spec}`).toBe(true);
       }
     }
   });
@@ -164,6 +183,84 @@ describe('static: the import closure of the real wiring has no model client', ()
     for (const f of reached) {
       const code = codeOf(fs.readFileSync(path.resolve(root, f), 'utf8'));
       expect(code, f).not.toMatch(/@google\/genai|gemini\.client|from '(\.\.\/)+ai'/);
+    }
+  });
+});
+
+describe('static: the ledger loader never reaches a model', () => {
+  const loaderFiles = ['load.ts', 'load-args.ts', 'load-main.ts', 'pg-sink.ts'];
+  const text = (f: string): string => codeOf(sources.find((s) => s.file === f)?.text ?? '');
+
+  it('no loader file names the model client, the genai SDK, the real model or reader wiring', () => {
+    for (const f of loaderFiles) {
+      expect(text(f), f).not.toMatch(
+        /real-llm|real-reader|gemini|@google\/genai|genai|from '(\.\.\/)+ai(\/[^']*)?'|drive\/extract|drive\/client/,
+      );
+    }
+  });
+
+  it('the loader core imports no config, Prisma, Drive or model code, not even lazily', () => {
+    for (const f of ['load.ts', 'load-args.ts']) {
+      expect(text(f), f).not.toMatch(/\bimport\(/);
+      expect(text(f), f).not.toMatch(/real-|prisma|\.\.\/\.\.\/config|\.\.\/\.\.\/logger/);
+    }
+  });
+
+  it('only load-main.ts has dynamic imports, and only of the roster, the sink and Prisma', () => {
+    const targets = [...text('load-main.ts').matchAll(/import\('([^']+)'\)/g)]
+      .map((m) => m[1])
+      .sort();
+    expect(targets).toEqual(['../../prisma', './pg-sink', './real-pilot-io', './real-pilot-io']);
+    expect(text('pg-sink.ts')).not.toMatch(/\bimport\(/);
+  });
+
+  it('the import closure of the loader (dynamic imports included) has no model client', () => {
+    const root = path.resolve(__dirname, '../../../..');
+    const seen = new Set<string>();
+    const queue = [
+      'src/casting/t3/load-main.ts',
+      'src/casting/t3/pg-sink.ts',
+      'src/casting/t3/real-pilot-io.ts',
+      'src/prisma.ts',
+    ].map((f) => path.resolve(root, f));
+    const resolve = (from: string, spec: string): string | null => {
+      const base = path.resolve(path.dirname(from), spec);
+      for (const c of [`${base}.ts`, path.join(base, 'index.ts')]) if (fs.existsSync(c)) return c;
+      return null;
+    };
+    while (queue.length > 0) {
+      const f = queue.pop() as string;
+      if (seen.has(f)) continue;
+      seen.add(f);
+      const code = codeOf(fs.readFileSync(f, 'utf8')).replace(
+        /import type [^;]*?from\s*'[^']+';?/gs,
+        '',
+      );
+      for (const m of code.matchAll(/(?:from|import\()\s*'([^']+)'/g)) {
+        const spec = m[1] as string;
+        if (!spec.startsWith('.')) continue;
+        const r = resolve(f, spec);
+        if (r) queue.push(r);
+      }
+    }
+    const reached = [...seen].map((f) => path.relative(root, f)).sort();
+    expect(reached.length).toBeGreaterThan(10);
+    expect(reached).not.toContain('src/ai/gemini.client.ts');
+    expect(reached).not.toContain('src/ai/index.ts');
+    expect(reached).not.toContain('src/casting/t3/real-llm.ts');
+    expect(reached).not.toContain('src/casting/t3/real-reader.ts');
+    // Drive modules appear in this closure only through real-pilot-io.ts's listing function,
+    // which the loader never calls (it uses `loadRosterIndex`); they are not a model either.
+    // The loader does not import the stage runner or the response schema (which pulls the genai
+    // type enum), and the only `ai/` file left in reach is the constants module.
+    for (const f of ['run.ts', 'pilot.ts', 'schema.ts']) {
+      expect(reached).not.toContain(`src/casting/t3/${f}`);
+    }
+    expect(reached.filter((f) => f.startsWith('src/ai/'))).toEqual(['src/ai/thinking.ts']);
+    for (const f of reached) {
+      expect(codeOf(fs.readFileSync(path.resolve(root, f), 'utf8')), f).not.toMatch(
+        /@google\/genai|gemini\.client|from '(\.\.\/)+ai'/,
+      );
     }
   });
 });
@@ -353,5 +450,107 @@ describe('dynamic: the pilot driver in dry-run', () => {
     expect(evaluated.llm).not.toHaveBeenCalled();
     expect(evaluated.client).not.toHaveBeenCalled();
     unmock();
+  });
+});
+
+describe('dynamic: the ledger loader with the client module poisoned', () => {
+  const ACCT = '11111111-1111-4111-8111-111111111111';
+
+  it('a dry-run and an apply never evaluate the model client, config, real-llm or the reader', async () => {
+    vi.resetModules();
+    const evaluated = { client: vi.fn(), config: vi.fn(), llm: vi.fn(), reader: vi.fn() };
+    vi.doMock('../../../ai/gemini.client', () => {
+      evaluated.client();
+      throw new Error('the real client must never be constructed here');
+    });
+    vi.doMock('../../../config', () => {
+      evaluated.config();
+      throw new Error('config must never be loaded here');
+    });
+    vi.doMock('../real-llm', () => {
+      evaluated.llm();
+      throw new Error('real-llm must never be loaded by the loader');
+    });
+    vi.doMock('../real-reader', () => {
+      evaluated.reader();
+      throw new Error('the reader must never be loaded by the loader');
+    });
+    const fs2 = await import('node:fs');
+    const os = await import('node:os');
+    const tmp = fs2.mkdtempSync(path.join(os.tmpdir(), 'load-poison-'));
+    try {
+      const { buildRosterIndex } = await import('../../identity');
+      const { MemorySink } = await import('../index');
+      const main = await import('../load-main');
+      const dir = path.join(tmp, 'ledger');
+      fs2.mkdirSync(dir);
+      const sig = {
+        accountId: ACCT,
+        windowStart: '2021-11-19',
+        variant: 'base',
+        sampleSize: 1,
+        seed: 's',
+        promptVersion: 'v1',
+        model: 'gemini-3.5-flash',
+        thinkingLevel: 'LOW',
+        capChars: 40000,
+      };
+      const version = 't3-v1:gemini-3.5-flash:low';
+      fs2.writeFileSync(
+        path.join(dir, 'header.json'),
+        JSON.stringify({
+          v: 1,
+          signature: sig,
+          extractorVersion: version,
+          sample: { fileIds: [] },
+        }),
+      );
+      fs2.writeFileSync(
+        path.join(dir, 'cells.jsonl'),
+        JSON.stringify({
+          v: 1,
+          cellKey: 'k1',
+          extractorVersion: version,
+          at: '2026-11-20T00:00:00.000Z',
+          status: 'ok',
+          reason: null,
+          candidate: { fileId: 'f1', accountId: ACCT, createdTime: null, projectRef: undefined },
+          docClass: 'gdoc',
+          contentHash: 'h',
+          docType: 'other',
+          truncated: false,
+          sentChars: 10,
+          attempts: 1,
+          usage: null,
+          mentions: [],
+          sanitizeStats: null,
+          groundingStats: null,
+        }) + '\n',
+      );
+      const sink = new MemorySink();
+      const io = {
+        loadRoster: async () => buildRosterIndex([]),
+        makeSink: async () => sink,
+        repoRoots: [path.join(tmp, 'repo')],
+        print: () => undefined,
+      };
+      const argv = ['--ledger-dir', dir, '--account-id', ACCT];
+      expect(await main.runLoadCli(argv, io)).toBe(3);
+      expect(await main.runLoadCli([...argv, '--apply'], io)).toBe(0);
+      expect(evaluated.client).not.toHaveBeenCalled();
+      expect(evaluated.config).not.toHaveBeenCalled();
+      expect(evaluated.llm).not.toHaveBeenCalled();
+      expect(evaluated.reader).not.toHaveBeenCalled();
+    } finally {
+      fs2.rmSync(tmp, { recursive: true, force: true });
+      for (const m of [
+        '../../../ai/gemini.client',
+        '../../../config',
+        '../real-llm',
+        '../real-reader',
+      ]) {
+        vi.doUnmock(m);
+      }
+    }
   });
 });

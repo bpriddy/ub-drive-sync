@@ -53,6 +53,32 @@ export interface CellRecord {
   readonly copyOfCellKey?: string;
 }
 
+/** A guard refused: nothing was started, no model client exists. */
+export class GuardError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GuardError';
+  }
+}
+
+export const PILOT_HEADER_FILE = 'header.json';
+
+/** `header.json` of a pilot ledger directory: written once by the pilot driver, never overwritten. */
+export interface LedgerHeader {
+  readonly v: 1;
+  readonly createdAt: string;
+  readonly signature: Readonly<Record<string, string | number>>;
+  readonly extractorVersion: string;
+  readonly sample: {
+    readonly seed: string;
+    readonly requested: number;
+    readonly pool: number;
+    readonly poolByClass: Readonly<Record<string, number>>;
+    readonly sampleByClass: Readonly<Record<string, number>>;
+    readonly fileIds: readonly string[];
+  };
+}
+
 export interface Ledger {
   load(): readonly CellRecord[];
   append(rec: CellRecord): void;

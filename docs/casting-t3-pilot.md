@@ -3,7 +3,8 @@
 The pilot driver runs the T3 stage (Drive document content mentions) on **one account** and a
 **fixed-size, stratified sample** of its kept shortlist. Results go **only to the run ledger**: no
 database sink, no `evidence` rows. The resolver re-runs later from the ledger without another model
-call. Entry point: `src/casting/t3/pilot-main.ts`; core: `pilot.ts`.
+call. Entry point: `src/casting/t3/pilot-main.ts`; core: `pilot.ts`. A finished ledger is loaded into
+Layer 1 later, with no model call, by a separate entry point (see "Loading a ledger into Layer 1").
 
 ## Dry-run (default, $0)
 
@@ -97,10 +98,60 @@ header (if a sampled file has left the listing, the run is refused: use a new di
 already in the ledger are skipped (failed ones too, unless `--retry-failed`), so no model call is
 repeated.
 
+## Loading a ledger into Layer 1
+
+A finished ledger becomes `evidence` rows (source `drive_content`) with **no model call and no
+document read**: `src/casting/t3/load-main.ts` (core: `load.ts`, sink: `pg-sink.ts`). Order:
+
+1. **The UB casting migration (gub-schemas 1.23.0) is applied** to the target database. Before it,
+   `--apply` is refused (Postgres 42P01 turned into a plain message, exit 2) and creates nothing,
+   not even a `sync_runs` row. The dry-run below reads only tables that exist today (`staff`), so it
+   works before and after the migration.
+2. **Dry-run** (the default): counts only, nothing written, exit 3.
+3. **`--apply`**, after the counts look right.
+
+```
+node dist/src/casting/t3/load-main.js --ledger-dir /abs/path/outside/the/repo \
+  --account-id <uuid> [--agency-domain agency.example ...] [--unknown-start-date YYYY-MM-DD ...]
+node dist/src/casting/t3/load-main.js ... --apply
+```
+
+`--ledger-dir` and `--account-id` are required. The account must be the one in the ledger header's
+signature (and in every ok and copy cell), otherwise the load is refused before the roster is read.
+`--agency-domain` (repeatable) is added to `CASTING_AGENCY_EMAIL_DOMAINS`; `--unknown-start-date` is
+the pilot's roster option. Use the same values as the pilot run. Unknown flags are errors.
+
+What it does: every ok cell's validated, grounded mentions are resolved again against the **current**
+roster by the stage's own function (`resolveLedgerRecords`, the one `runT3` uses): the same row builder
+and the same identical-content copy expansion (the `copy` lines the pilot recorded in the ledger give
+the kept to copies mapping; copies get rows for $0 under their own file, account and job number).
+Rows carry the ledger's extractor version (`t3-<prompt>:<model>:<thinking>`), the purge key of that
+configuration. The period clamp uses the run date of the load (printed). The dry-run prints cells by
+status, mentions, copies, rows by `person_kind` and `withheld_reason`, duplicates by `claim_hash`
+and the rows to write; no names, quotes or file ids.
+
+Refused (exit 2, nothing written): a ledger inside the repository checkout; a missing directory,
+header or cells file; another account; a header whose extractor version is not the one its own
+signature gives; a ledger written under another **prompt version** than this code (its mentions were
+vetted by other sanitising and grounding rules: check out that version's commit); an ok cell with
+another extractor version than the header; a ledger with no ok cell. A torn last line of
+`cells.jsonl` is counted and reported (`unreadable lines`).
+
+Apply writes one `sync_runs` row (`source = 'casting_t3'`, status `running`, then `success` or
+`failed`, details = counts and ids only) and inserts in batches of 500 with
+`ON CONFLICT (extractor_version, claim_hash) DO NOTHING`. A second run over the same ledger inserts
+0 and reports every row as already present. A failure after some batches keeps those batches (the
+run ends `failed`, details name the error); running the load again completes it. A claim that sits
+in two ok cells (same file, same claim) is written once.
+
+Exit codes: 0 loaded, 1 error, 2 refused, 3 dry-run.
+
 ## Tests
 
 `src/casting/t3/__tests__/`: `sample.test.ts` (determinism, stratification), `pilot.test.ts` (guards,
 dry-run touches nothing, apply and resume with a fake model), `truncate-estimate.test.ts` (estimate formula and the calibrated presets), `listing-candidates.test.ts`, and
-`no-real-client.test.ts` (static allow-list including the pilot entry point, import closure of the
-real wiring has no model client, dry-run with the client module poisoned). All use a mocked model and
-synthetic data.
+`no-real-client.test.ts` (static allow-list including the pilot entry point and the ledger loader,
+import closure of the real wiring and of the loader has no model client, dry-run with the client module
+poisoned), `load.test.ts` and `pg-sink.test.ts` (the ledger loader: ledgers are produced by the pilot
+driver itself into a temp directory, rows are compared with what the stage's sink received, guards,
+idempotent apply, 42P01 before the migration). All use a mocked model and synthetic data.
