@@ -90,58 +90,33 @@ export const BUDGET_BAND_CUTS = {
 // ── Conflicts ───────────────────────────────────────────────────────────────
 
 /**
- * Roles that one project normally has ONE holder of. Two different people with
- * a servable claim to the same role on the same project, at overlapping (or
- * unknown) periods, are a conflict: both are withheld. [ASSUME] Layer 1 has no
- * "sole" marker, so this over-withholds real co-producers. Empty the set to
- * switch the rule off.
+ * Roles that one project has ONE holder of. Two different people with a servable
+ * claim to the same role on the same project, at overlapping (or unknown)
+ * periods, are a conflict: both are withheld. Layer 1 has no "sole" marker, so
+ * the set is kept to the one role where a second holder is a real contradiction
+ * (user ruling 2026-11-20: `producer` is NOT in it, projects have co-producers).
+ * Empty the set to switch the rule off.
  */
-export const SINGLE_HOLDER_ROLES: ReadonlySet<RoleNorm> = new Set<RoleNorm>([
-  'executive_producer',
-  'producer',
-]);
+export const SINGLE_HOLDER_ROLES: ReadonlySet<RoleNorm> = new Set<RoleNorm>(['executive_producer']);
 
-export type RoleFamily =
-  | 'creative'
-  | 'strategy'
-  | 'client_service'
-  | 'technology_data'
-  | 'media_comms'
-  | 'finance'
-  | 'other';
+/** An unordered pair of roles one person cannot hold on the same project. */
+export type IncompatibleRolePair = readonly [RoleNorm, RoleNorm];
 
 /**
- * Role families for the contradiction rule. [ASSUME] One person with servable
- * claims in two different families (not `other`) on the same project is a
- * contradiction: all those claims are withheld. Several roles inside one family
- * (a copywriter who is also an art director) are not. `designer` sits with
- * `creative`; producers sit with client service (delivery side).
+ * Pairs of roles that contradict each other when the SAME person has a servable
+ * claim to both on the SAME project: both claims are withheld as `conflicting`.
+ * An explicit short list, not role families, and deliberately conservative: a small
+ * agency legitimately combines neighbouring crafts (strategist and copywriter,
+ * art director and designer), so only combinations from opposite ends of the
+ * agency are listed. PROPOSAL, to be edited by the Casting contact; the
+ * reasons are in docs/casting-fusion.md. Order inside a pair does not matter.
  */
-export const ROLE_FAMILY: Readonly<Record<RoleNorm, RoleFamily>> = {
-  executive_creative_director: 'creative',
-  creative_director: 'creative',
-  associate_creative_director: 'creative',
-  art_director: 'creative',
-  copywriter: 'creative',
-  designer: 'creative',
-  design_director: 'creative',
-  strategy_director: 'strategy',
-  strategist: 'strategy',
-  account_director: 'client_service',
-  account_manager: 'client_service',
-  account_executive: 'client_service',
-  executive_producer: 'client_service',
-  producer: 'client_service',
-  production_manager: 'client_service',
-  project_manager: 'client_service',
-  technologist: 'technology_data',
-  data_analyst: 'technology_data',
-  media_planner: 'media_comms',
-  social_media_specialist: 'media_comms',
-  pr_specialist: 'media_comms',
-  finance: 'finance',
-  other: 'other',
-};
+export const INCOMPATIBLE_ROLE_PAIRS: readonly IncompatibleRolePair[] = [
+  ['finance', 'creative_director'],
+  ['finance', 'account_director'],
+  ['executive_creative_director', 'account_executive'],
+  ['account_director', 'art_director'],
+];
 
 // ── Storage ─────────────────────────────────────────────────────────────────
 

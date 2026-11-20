@@ -72,6 +72,7 @@ function sinks() {
       written.push(args);
       return {
         deleted: 1,
+        deletedOtherVersions: 2,
         inserted: args.claims.length,
         links: args.claims.reduce((n, c) => n + c.evidenceIds.length, 0),
       };
@@ -160,7 +161,11 @@ describe('runFusion', () => {
     expect(
       s.written.every((w) => w.fusionVersion === 'fusion-v1' && w.syncRunId === report.runId),
     ).toBe(true);
-    expect(s.finished[0]?.counts).toMatchObject({ evidenceRows: 3, deleted: 2 });
+    expect(s.finished[0]?.counts).toMatchObject({
+      evidenceRows: 3,
+      deleted: 2,
+      deletedOtherVersions: 4,
+    });
     expect(report.accounts.every((a) => a.written !== null)).toBe(true);
   });
 

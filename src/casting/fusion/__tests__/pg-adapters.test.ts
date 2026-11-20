@@ -156,6 +156,7 @@ describe('PgStaffLoader', () => {
 /** A transaction client that records every statement in order. */
 function fakeTx(affectedFor: (sql: Prisma.Sql) => number = () => 1) {
   const log: Prisma.Sql[] = [];
+  const state = { transactions: 0 };
   let usedOptions: unknown = null;
   const tx = {
     $executeRaw: async (sql: Prisma.Sql) => {
@@ -166,10 +167,11 @@ function fakeTx(affectedFor: (sql: Prisma.Sql) => number = () => 1) {
   const db: TxClient = {
     $transaction: (async (fn: (t: typeof tx) => Promise<unknown>, options?: unknown) => {
       usedOptions = options;
+      state.transactions += 1;
       return fn(tx);
     }) as TxClient['$transaction'],
   };
-  return { db, log, options: () => usedOptions };
+  return { db, log, state, options: () => usedOptions };
 }
 
 describe('PgExperienceWriter', () => {
@@ -188,9 +190,15 @@ describe('PgExperienceWriter', () => {
     ).claims;
   };
 
-  it('deletes what the version wrote for the account, then inserts rows, then links, in one transaction', async () => {
+  it('deletes other versions, then this version, then inserts rows, then links, in one transaction', async () => {
     const { db, log, options } = fakeTx((sql) =>
-      sql.sql.includes('DELETE') ? 4 : sql.sql.includes('experience_evidence_links') ? 2 : 1,
+      sql.sql.includes('<>')
+        ? 7
+        : sql.sql.includes('DELETE')
+          ? 4
+          : sql.sql.includes('experience_evidence_links')
+            ? 2
+            : 1,
     );
     const c = claims();
     const out = await new PgExperienceWriter(db).replaceAccount({
@@ -199,15 +207,48 @@ describe('PgExperienceWriter', () => {
       syncRunId: uid(7, 7),
       claims: c,
     });
-    expect(out).toEqual({ deleted: 4, inserted: 1, links: 2 });
+    expect(out).toEqual({ deleted: 4, deletedOtherVersions: 7, inserted: 1, links: 2 });
     expect(log.map((s) => s.sql.trim().split(/\s+/).slice(0, 3).join(' '))).toEqual([
+      'DELETE FROM experience',
       'DELETE FROM experience',
       'INSERT INTO experience',
       'INSERT INTO experience_evidence_links',
     ]);
-    expect(log[0]!.values).toEqual(['fusion-v1', ACCOUNT]);
+    // 1: every OTHER version of the account (links cascade); 2: this version of the account
+    expect(log[0]!.sql).toMatch(/account_id = .*\s+AND fusion_version <> /s);
+    expect(log[0]!.values).toEqual([ACCOUNT, 'fusion-v1']);
+    expect(log[1]!.sql).toMatch(/fusion_version = /);
+    expect(log[1]!.sql).not.toMatch(/<>/);
+    expect(log[1]!.values).toEqual(['fusion-v1', ACCOUNT]);
     expect(options()).toEqual(WRITE_TX_OPTIONS);
     expect(WRITE_TX_OPTIONS.timeout).toBeGreaterThan(5000);
+  });
+
+  it('every statement, both deletes included, runs inside ONE transaction', async () => {
+    const { db, log, state } = fakeTx();
+    await new PgExperienceWriter(db).replaceAccount({
+      accountId: ACCOUNT,
+      fusionVersion: 'fusion-v2',
+      syncRunId: uid(7, 7),
+      claims: claims(),
+    });
+    expect(state.transactions).toBe(1);
+    expect(log).toHaveLength(4);
+  });
+
+  it('a failure after the deletes propagates out of the transaction (Prisma rolls it back)', async () => {
+    const { db } = fakeTx((sql) => {
+      if (/INSERT INTO experience \(/.test(sql.sql)) throw new Error('insert failed');
+      return 1;
+    });
+    await expect(
+      new PgExperienceWriter(db).replaceAccount({
+        accountId: ACCOUNT,
+        fusionVersion: 'fusion-v2',
+        syncRunId: uid(7, 7),
+        claims: claims(),
+      }),
+    ).rejects.toThrow('insert failed');
   });
 
   it('writes the run id and the derived link ids', async () => {
@@ -219,13 +260,13 @@ describe('PgExperienceWriter', () => {
       syncRunId: uid(7, 7),
       claims: c,
     });
-    expect(log[1]!.values).toContain(uid(7, 7));
-    expect(log[1]!.values).toContain(c[0]!.row.experienceHash);
+    expect(log[2]!.values).toContain(uid(7, 7));
+    expect(log[2]!.values).toContain(c[0]!.row.experienceHash);
     const first = c[0]!.evidenceIds[0]!;
-    expect(log[2]!.values).toContain(linkId(c[0]!.row.id, first));
+    expect(log[3]!.values).toContain(linkId(c[0]!.row.id, first));
   });
 
-  it('no claims: only the delete runs (a rebuild may legitimately end empty)', async () => {
+  it('no claims: only the two deletes run (a rebuild may legitimately end empty)', async () => {
     const { db, log } = fakeTx();
     const out = await new PgExperienceWriter(db).replaceAccount({
       accountId: ACCOUNT,
@@ -233,7 +274,7 @@ describe('PgExperienceWriter', () => {
       syncRunId: uid(7, 7),
       claims: [],
     });
-    expect(log).toHaveLength(1);
+    expect(log).toHaveLength(2);
     expect(out.inserted).toBe(0);
   });
 
@@ -298,7 +339,7 @@ describe('PgFusionRunStore', () => {
     await store.finish(
       'run-1',
       'failed',
-      { evidenceRows: 10, deleted: 1, inserted: 2, links: 3 },
+      { evidenceRows: 10, deleted: 1, deletedOtherVersions: 0, inserted: 2, links: 3 },
       'failed: x',
     );
     expect(updated[0]).toMatchObject({

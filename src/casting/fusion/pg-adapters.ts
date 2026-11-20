@@ -271,9 +271,15 @@ export class PgExperienceWriter implements ExperienceWriter {
   constructor(private readonly db: TxClient) {}
 
   /**
-   * One transaction per account: delete what this fusion_version wrote for the
-   * account, insert the new claims, insert the links. Either all of it lands or
-   * none. Before the UB migration the DELETE fails with 42P01.
+   * One transaction per account: delete the account's rows of every OTHER
+   * fusion_version, delete its rows of this version, insert the new claims, insert
+   * the links. Either all of it lands or none. Links of deleted rows cascade. Before
+   * the UB migration the first DELETE fails with 42P01.
+   *
+   * OPERATIONAL ORDER: serving reads exactly one version (the pin
+   * CASTING_FUSION_VERSION), so after an apply of a NEW version the old version's
+   * rows of that account are gone and the pinned read returns nothing for it until
+   * the pin is switched. See docs/casting-fusion.md.
    */
   async replaceAccount(args: {
     accountId: string;
@@ -282,6 +288,11 @@ export class PgExperienceWriter implements ExperienceWriter {
     claims: readonly FusedClaim[];
   }): Promise<WriteCounts> {
     return this.db.$transaction(async (tx) => {
+      const deletedOtherVersions = await tx.$executeRaw(Prisma.sql`
+        DELETE FROM experience
+         WHERE account_id = ${args.accountId}::uuid
+           AND fusion_version <> ${args.fusionVersion}
+      `);
       const deleted = await tx.$executeRaw(Prisma.sql`
         DELETE FROM experience
          WHERE fusion_version = ${args.fusionVersion}
@@ -326,7 +337,7 @@ export class PgExperienceWriter implements ExperienceWriter {
           VALUES ${Prisma.join(tuples)}
         `);
       }
-      return { deleted, inserted, links: linked };
+      return { deleted, deletedOtherVersions, inserted, links: linked };
     }, WRITE_TX_OPTIONS);
   }
 }

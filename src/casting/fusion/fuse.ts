@@ -29,7 +29,7 @@ import {
   FUSION_VERSION,
   LOST_PITCH_FACTOR,
   PITCH_LOST_STATUSES,
-  ROLE_FAMILY,
+  INCOMPATIBLE_ROLE_PAIRS,
   SERVE_MIN_CONFIDENCE,
   SERVE_MIN_TIERS,
   SINGLE_HOLDER_ROLES,
@@ -86,6 +86,22 @@ export function experienceHash(parts: {
       parts.periodStart ?? '',
     ]),
   );
+}
+
+/**
+ * The validation label, one definition for this stage and for the serving layer
+ * (S7). `activity_checked` = the claim is DATED (a period start or end is known)
+ * AND some Layer 1 row behind it has source `drive_activity` (T2). Anything else,
+ * including every undated claim and every claim with no T2 row, is `not_validated`.
+ * It is a label about checkability, never an accuracy figure; it is not stored.
+ */
+export function validationLabel(
+  periodStart: string | null,
+  periodEnd: string | null,
+  hasActivityEvidence: boolean,
+): ValidationLabel {
+  const dated = periodStart !== null || periodEnd !== null;
+  return dated && hasActivityEvidence ? 'activity_checked' : 'not_validated';
 }
 
 export const experienceId = (fusionVersion: string, hash: string): string =>
@@ -343,11 +359,12 @@ export function fuse(input: FusionInput): FusionOutput {
     }
   }
   for (const list of personGroups.values()) {
-    const withFamily = list.filter(
-      (p) => p.roleNorm !== null && ROLE_FAMILY[p.roleNorm] !== 'other',
-    );
-    const families = new Set(withFamily.map((p) => ROLE_FAMILY[p.roleNorm as RoleNorm]));
-    if (families.size >= 2) for (const p of withFamily) conflicted.add(p);
+    for (const [x, y] of INCOMPATIBLE_ROLE_PAIRS) {
+      const withX = list.filter((p) => p.roleNorm === x);
+      const withY = list.filter((p) => p.roleNorm === y);
+      if (withX.length === 0 || withY.length === 0) continue;
+      for (const p of [...withX, ...withY]) conflicted.add(p);
+    }
   }
   for (const p of conflicted) p.reason = 'conflicting';
 
@@ -362,9 +379,7 @@ export function fuse(input: FusionInput): FusionOutput {
     const id = experienceId(FUSION_VERSION, hash);
     const piece = p.ref.piece;
     const campaign = p.ref.campaign;
-    const validation: ValidationLabel = p.score.tiers.includes('T2')
-      ? 'activity_checked'
-      : 'not_validated';
+    const validation = validationLabel(p.period.start, p.period.end, p.score.tiers.includes('T2'));
     return {
       row: {
         id,

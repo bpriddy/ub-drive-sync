@@ -1,4 +1,12 @@
-export { fuse, experienceHash, experienceId, linkId, highestSeniority, uuidFromText } from './fuse';
+export {
+  fuse,
+  experienceHash,
+  experienceId,
+  linkId,
+  highestSeniority,
+  uuidFromText,
+  validationLabel,
+} from './fuse';
 export { runFusion, DEFAULT_CHUNK_SIZE } from './run';
 export type {
   FusionDeps,
