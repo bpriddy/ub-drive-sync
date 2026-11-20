@@ -25,7 +25,12 @@ import path from 'node:path';
 import type { LlmDriver } from '../../ai/ai.types';
 import type { RosterIndex } from '../identity';
 import type { PilotArgs } from './pilot-args';
-import { estimate, ASSUMPTION_PRESETS, type CostAssumptions } from './estimate';
+import {
+  estimate,
+  ASSUMPTION_PRESETS,
+  PRESETS_CALIBRATION,
+  type CostAssumptions,
+} from './estimate';
 import {
   assertOutsideRepo,
   extractorVersionOf,
@@ -198,18 +203,10 @@ const refusingLlm = async (): Promise<LlmDriver> => {
 
 // ---- reference estimate -----------------------------------------------------------------
 
-/** [ASSUME 4.0 chars/token] prompt and schema overhead measured in S5a (characters), in tokens. */
-const S5A_OVERHEAD = { low: 757, base: 852, high: 1136 } as const;
-
+/** The calibrated presets (pilot P1, thinking LOW), keyed for the dry-run print. */
 export function referenceAssumptions(): Record<string, CostAssumptions> {
   const p = ASSUMPTION_PRESETS;
-  return {
-    low: { ...p.low, overheadTokens: S5A_OVERHEAD.low },
-    base: { ...p.base, overheadTokens: S5A_OVERHEAD.base },
-    high: { ...p.high, overheadTokens: S5A_OVERHEAD.high },
-    // Thinking LOW: [ASSUME: 100 thought tokens per call, measured on another prompt (H7a)].
-    baseLow: { ...p.base, overheadTokens: S5A_OVERHEAD.base, tokensThoughts: 100 },
-  };
+  return { low: p.low, base: p.base, high: p.high };
 }
 
 function lengthStats(lengths: readonly number[], cap: number): string {
@@ -413,14 +410,12 @@ export async function runPilot(args: PilotArgs, io: PilotIo): Promise<PilotOutco
       ? Array.from({ length: preview.plan.cellsToRun }, () => PILOT_FALLBACK_CHARS)
       : recorder.lengths;
     io.print(
-      'reference estimate, S5a overhead (757/852/1136 tokens, [ASSUME 4.0 chars/token]); low / base / high / base-with-LOW-thoughts [ASSUME 100]:',
+      `reference estimate, presets calibrated: ${PRESETS_CALIBRATION} (thinking LOW; Flash Lite token use [ASSUME] = Flash); low / base / high:`,
     );
     for (const model of Object.keys(MODEL_PRICES)) {
       const cost = (k: string): string =>
         `$${(estimate(model, { cellChars }, refs[k] as CostAssumptions)?.costUsd ?? 0).toFixed(2)}`;
-      io.print(
-        `  ${model}: ${cost('low')} / ${cost('base')} / ${cost('high')} / ${cost('baseLow')}`,
-      );
+      io.print(`  ${model}: ${cost('low')} / ${cost('base')} / ${cost('high')}`);
     }
   }
 
