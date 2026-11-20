@@ -26,8 +26,9 @@ gives identical rows, hashes, ids and metrics (property tests in
   a reason (`conflicting`, `unconfirmed`) and never served. There is no review queue.
 - Newer `extractor_version` supersedes older, per (source, file).
 - Presence-only claims (no content row) are counted, not stored (`STORE_PRESENCE_ONLY_CLAIMS`).
-- `--apply` replaces the account's output of this `fusion_version` in one
-  transaction (delete, insert rows, insert links). Layer 2 is a rebuildable
+- `--apply` rebuilds one account in ONE transaction: delete the account's rows of
+  every OTHER `fusion_version` (their links cascade), delete its rows of this
+  version, insert the new rows, insert the links. Layer 2 is a rebuildable
   projection; only Layer 1 is append-only.
 
 ## Confidence formula (`fusion-v1`)
@@ -58,12 +59,57 @@ the serving layer must read one version only.
 - Window: a claim whose period ends more than 30 days before the person's
   `startedAt` is `conflicting`. No end gate.
 - Seniority: the highest value across the claim's rows wins.
-- Conflicts, among claims that would otherwise be served: two people with the
-  same single-holder role (`producer`, `executive_producer`) on overlapping or
-  unknown periods; one person in two different role families on one project.
+- Conflicts, among claims that would otherwise be served (a weak rival never
+  suppresses a strong claim):
+  - two different people with a claim to the same single-holder role on the same
+    project at overlapping or unknown periods. The set is `executive_producer`
+    only (`SINGLE_HOLDER_ROLES`); `producer` is not in it, projects have co-producers;
+  - one person with claims to both roles of an incompatible pair on the same
+    project (`INCOMPATIBLE_ROLE_PAIRS`, below). Only the members of the pair are
+    withheld; the person's other roles stay served.
 - Budget band cut points (250k / 1M / 2.5M) are TEMPORARY (`BUDGET_BAND_CUTS`).
 - Recency is not in the formula. Older years are labelled `not_validated`
-  (no T2 evidence behind the claim), never hidden below the threshold.
+  (undated, or no T2 evidence behind the claim), never hidden below the threshold.
+
+## Incompatible role pairs (proposal)
+
+An explicit short list in `constants.ts`, no role families. Conservative on purpose:
+a small agency legitimately combines neighbouring crafts (strategist and copywriter,
+art director and designer, copywriter and art director), so only combinations from
+opposite ends of the agency are listed. To be edited by the Casting contact.
+
+| Pair                                                | Why one person does not hold both on one project                    |
+| --------------------------------------------------- | ------------------------------------------------------------------- |
+| `finance` + `creative_director`                     | budget control and creative leadership are opposite seats           |
+| `finance` + `account_director`                      | finance reviews what the client lead commits; independent by design |
+| `executive_creative_director` + `account_executive` | top of the creative ladder and the junior client-service seat       |
+| `account_director` + `art_director`                 | client lead and hands-on craft are different jobs on one project    |
+
+## Validation label (one definition, shared with serving)
+
+`activity_checked` means the claim is DATED (a period start or end is known) AND at
+least one Layer 1 row behind it has source `drive_activity` (T2). Every other claim,
+including every undated claim and every claim with no T2 row, is `not_validated`.
+It says whether a claim could be cross-checked, never how accurate it is. It is not
+stored: S7 computes it from the claim's period and the sources of its linked
+evidence, with the same rule as `validationLabel()` in `fuse.ts`.
+
+## Changing `fusion_version`: operational order
+
+Serving (S7) reads exactly ONE version, named by the pin `CASTING_FUSION_VERSION`.
+Applying a new version to an account removes that account's rows of every other
+version in the same transaction, so after the apply the pinned (old) version has no
+rows for that account and the served answer for it is EMPTY until the pin is
+switched. Order:
+
+1. Ship the code with the new `FUSION_VERSION`.
+2. Run `--apply` for ALL accounts in as short a window as possible (dry-run first).
+3. Switch `CASTING_FUSION_VERSION` to the new version immediately after the last
+   account finishes.
+4. Between steps 2 and 3 the answer is empty for the rebuilt accounts. If that is
+   not acceptable, turn the serving kill switch off for the window.
+
+Rolling back is the same order in reverse: deploy the old code, re-apply, switch the pin.
 
 ## Proxy metrics
 
