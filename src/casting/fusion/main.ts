@@ -23,7 +23,7 @@ import {
 } from './pg-adapters';
 import { runFusion } from './run';
 
-async function main(argv: readonly string[]): Promise<number> {
+export async function main(argv: readonly string[]): Promise<number> {
   const args = parseFusionArgs(argv);
   const report = await runFusion(
     {

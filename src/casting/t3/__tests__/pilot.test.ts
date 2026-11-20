@@ -11,6 +11,7 @@ import { JsonlLedger } from '../ledger';
 import {
   GuardError,
   PILOT_EXIT,
+  type BeforeApplyInfo,
   PILOT_HEADER_FILE,
   inspectLedgerDir,
   runPilot,
@@ -441,7 +442,7 @@ describe('apply (mocked model only)', () => {
     const again = await runPilot(applyArgs(dir, 20), h.io);
     expect(again.exitCode).toBe(PILOT_EXIT.ok);
     expect(h.llm.calls).toHaveLength(20);
-    expect(h.printed.join('\n')).toMatch(/already done in the ledger: 20   to run: 0/);
+    expect(h.printed.join('\n')).toMatch(/already done in the ledger: 20 {3}to run: 0/);
     expect(h.printed.join('\n')).toContain('[resumed: cells taken from the ledger header]');
   });
 
@@ -544,5 +545,52 @@ describe('runPilotCli', () => {
     expect(await runPilotCli([...BASE, '--sample-size', '5'], h.io)).toBe(PILOT_EXIT.dryRun);
     err.mockRestore();
     expect(h.spies.makeLlm).not.toHaveBeenCalled();
+  });
+});
+
+describe('beforeApply hook (the casting-run guard)', () => {
+  it('runs after the PROPOSAL and before the header, the model client and the sink', async () => {
+    const h = harness(synth(60));
+    const dir = path.join(ledgers, 'hook');
+    const seen: BeforeApplyInfo[] = [];
+    const io: PilotIo = {
+      ...h.io,
+      beforeApply: (info) => {
+        seen.push(info);
+        expect(h.printed[0]).toMatch(/^PROPOSAL/);
+        expect(fs.existsSync(path.join(dir, PILOT_HEADER_FILE))).toBe(false);
+        expect(h.spies.makeLlm).not.toHaveBeenCalled();
+        expect(h.spies.makeSink).not.toHaveBeenCalled();
+      },
+    };
+    const out = await runPilot(applyArgs(dir, 20), io);
+    expect(out.exitCode).toBe(PILOT_EXIT.ok);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ cells: 20, model: 'gemini-3.5-flash', baseComplete: true });
+    expect(seen[0]?.baseCostUsd).toBeGreaterThan(0);
+  });
+
+  it('a GuardError from it refuses: no header, no client, no sink, no model call', async () => {
+    const h = harness(synth(60));
+    const dir = path.join(ledgers, 'hook-refused');
+    const io: PilotIo = {
+      ...h.io,
+      beforeApply: () => {
+        throw new GuardError('refused by the caller');
+      },
+    };
+    await expect(runPilot(applyArgs(dir, 20), io)).rejects.toThrow(/refused by the caller/);
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(h.spies.makeLlm).not.toHaveBeenCalled();
+    expect(h.spies.makeSink).not.toHaveBeenCalled();
+    expect(h.llm.calls).toHaveLength(0);
+  });
+
+  it('is not called in a dry-run', async () => {
+    const h = harness(synth(60));
+    const beforeApply = vi.fn();
+    const out = await runPilot(args('--sample-size', '20'), { ...h.io, beforeApply });
+    expect(out.exitCode).toBe(PILOT_EXIT.dryRun);
+    expect(beforeApply).not.toHaveBeenCalled();
   });
 });

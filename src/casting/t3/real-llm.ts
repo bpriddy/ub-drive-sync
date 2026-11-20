@@ -13,5 +13,12 @@ import type { LlmDriver } from '../../ai/ai.types';
 
 export async function createRealLlm(): Promise<LlmDriver> {
   const mod = await import('../../ai/gemini.client');
+  // gemini.client falls back to a mock driver when no Gemini config is present. A paid run must
+  // never go on with it: it would "succeed" with empty answers.
+  if (mod.defaultLlm.name === 'mock') {
+    throw new Error(
+      'the model client is the mock driver: set GEMINI_USE_ENTERPRISE=true and GCP_PROJECT_ID; nothing was started',
+    );
+  }
   return mod.defaultLlm;
 }

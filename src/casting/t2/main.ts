@@ -20,7 +20,7 @@ import { PgFileIndexLookup, PgPeopleMapReader, PgStatsReader, PgT2RunStore } fro
 import { buildT2Roster } from './roster';
 import { runT2 } from './run';
 
-async function main(argv: readonly string[]): Promise<number> {
+export async function main(argv: readonly string[]): Promise<number> {
   const args = parseT2Args(argv);
   const today = new Date();
   const envDomains = (process.env['CASTING_AGENCY_EMAIL_DOMAINS'] ?? '')

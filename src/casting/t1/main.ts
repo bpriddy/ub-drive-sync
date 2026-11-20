@@ -23,7 +23,7 @@ import {
 } from './pg-adapters';
 import { runT1 } from './run';
 
-async function main(argv: readonly string[]): Promise<number> {
+export async function main(argv: readonly string[]): Promise<number> {
   const args = parseT1Args(argv);
   const today = new Date();
   const envDomains = (process.env['CASTING_AGENCY_EMAIL_DOMAINS'] ?? '')

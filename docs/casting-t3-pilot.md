@@ -6,6 +6,10 @@ database sink, no `evidence` rows. The resolver re-runs later from the ledger wi
 call. Entry point: `src/casting/t3/pilot-main.ts`; core: `pilot.ts`. A finished ledger is loaded into
 Layer 1 later, with no model call, by a separate entry point (see "Loading a ledger into Layer 1").
 
+The whole chain (T1, T2, this driver, the loader, fusion) for one account runs from one command with
+extra guards: see [casting-pipeline.md](./casting-pipeline.md). This driver also runs full waves
+(`--sample-size` at least the pool); the name is historical.
+
 ## Dry-run (default, $0)
 
 ```
