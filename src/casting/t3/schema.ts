@@ -196,10 +196,9 @@ export function parseMentionsResponse(text: string): ParsedResponse {
       quote = quote.replace(new RegExp(URL_LIKE.source + '\\S*', 'gi'), '[link]');
       stats.quoteLinkRedacted++;
     }
-    if (quote.length > EVIDENCE_QUOTE_MAX_CHARS) {
-      quote = quote.slice(0, EVIDENCE_QUOTE_MAX_CHARS);
-      stats.quoteTruncated++;
-    }
+    // Counted here, cut in groundMentions: a quote cut before grounding loses its
+    // last word mid-way and no longer matches the text it came from.
+    if (quote.length > EVIDENCE_QUOTE_MAX_CHARS) stats.quoteTruncated++;
     if (quote.length === 0) quote = null;
     const period = item.data.period_text === null ? null : squash(item.data.period_text);
     mentions.push({
