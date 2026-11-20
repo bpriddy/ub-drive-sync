@@ -169,7 +169,6 @@ function loadIo(sink: T3Sink, over: Partial<LoadIo> = {}): LoadIo & { printed: s
     makeSink: async () => sink,
     repoRoots: [repo],
     print: (l) => printed.push(l),
-    now: NOW,
     printed,
     ...over,
   };
@@ -289,6 +288,70 @@ describe('rows are what the stage produces', () => {
     expect(empty.report.byKind['staff'] ?? 0).toBe(0);
     const full = await runLoad(loadArgs(run.dir), loadIo(new RecordingSink()));
     expect(full.report.byKind['staff']).toBeGreaterThan(0);
+  });
+});
+
+describe('run date of the period clamp', () => {
+  /** Makes every mention of the first ok cell state the period "2026" (ends after the pilot's run date). */
+  function withPeriod2026(dir: string): void {
+    const file = path.join(dir, 'cells.jsonl');
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    const out = lines.map((l) => {
+      const rec = JSON.parse(l);
+      if (rec.status !== 'ok') return l;
+      return JSON.stringify({
+        ...rec,
+        mentions: rec.mentions.map((m: object) => ({ ...m, periodText: '2026' })),
+      });
+    });
+    fs.writeFileSync(file, out.join('\n') + '\n');
+  }
+
+  it('comes from header.createdAt: two loads on different "today" give the same period_end', async () => {
+    const run = await makeLedger('t1');
+    withPeriod2026(run.dir);
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-12-01T00:00:00Z'));
+      const early = await runLoad(loadArgs(run.dir), loadIo(new RecordingSink()));
+      vi.setSystemTime(new Date('2028-03-05T00:00:00Z'));
+      const late = await runLoad(loadArgs(run.dir), loadIo(new RecordingSink()));
+      expect(late.report.rows).toEqual(early.report.rows);
+      const ends = new Set(early.report.rows.map((r) => r.period_end));
+      // Clamped to the pilot's run day (2026-11-20), not to either load day and not 2026-12-31.
+      expect(ends).toEqual(new Set(['2026-11-20']));
+      expect(early.report.runDay).toBe('2026-11-20');
+      expect(late.report.runDay).toBe('2026-11-20');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['not a string', 20261120],
+    ['not ISO', 'last Friday'],
+    ['a date without a time', '2026-11-20'],
+    ['an impossible date', '2026-13-45T00:00:00Z'],
+  ])('refuses a header whose createdAt is %s (no fallback to today)', async (_name, value) => {
+    const run = await makeLedger(`t2-${String(_name).replace(/\W/g, '')}`);
+    const file = path.join(run.dir, PILOT_HEADER_FILE);
+    const header = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (value === undefined) delete header.createdAt;
+    else header.createdAt = value;
+    fs.writeFileSync(file, JSON.stringify(header));
+    const roster = vi.fn(async () => buildRosterIndex([]));
+    await expect(
+      runLoad(loadArgs(run.dir), loadIo(new RecordingSink(), { loadRoster: roster })),
+    ).rejects.toThrow(/no usable createdAt/);
+    expect(roster).not.toHaveBeenCalled();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const code = await runLoadCli(
+      ['--ledger-dir', run.dir, '--account-id', ACCT],
+      loadIo(new RecordingSink()),
+    );
+    err.mockRestore();
+    expect(code).toBe(2);
   });
 });
 

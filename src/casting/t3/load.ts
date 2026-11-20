@@ -64,12 +64,12 @@ export interface LoadIo {
   /** The checkout and the working directory: a ledger inside either is refused. */
   readonly repoRoots: readonly string[];
   print(line: string): void;
-  /** The run date for the period clamp (default: now). */
-  readonly now?: Date | undefined;
 }
 
 export interface LoadedLedger {
   readonly header: LedgerHeader;
+  /** The date of the pilot run (`header.createdAt`): the run date of the period clamp. */
+  readonly runDate: Date;
   readonly records: readonly CellRecord[];
   /** Non-empty lines of cells.jsonl that did not parse as a v1 record (a torn last line). */
   readonly unreadableLines: number;
@@ -115,6 +115,19 @@ export function readLedgerDir(
       '--account-id is not the account this ledger was run for (header signature); nothing was read',
     );
   }
+  // The clamp's run date is the pilot's, never today's: a load on another day must give the
+  // same rows. No fallback: a header without a usable date is refused.
+  const created = header.createdAt;
+  if (
+    typeof created !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(created) ||
+    Number.isNaN(Date.parse(created))
+  ) {
+    throw new GuardError(
+      'the ledger header has no usable createdAt (ISO date-time): the period clamp needs the date of the pilot run',
+    );
+  }
+  const runDate = new Date(created);
   const fromSignature = extractorVersionOf({
     promptVersion: String(sig['promptVersion']),
     model: String(sig['model']),
@@ -156,7 +169,7 @@ export function readLedgerDir(
       `${foreign} cell(s) of the ledger belong to another account than --account-id; nothing was read`,
     );
   }
-  return { header, records, unreadableLines: nonEmpty - records.length };
+  return { header, runDate, records, unreadableLines: nonEmpty - records.length };
 }
 
 export interface LoadReport {
@@ -202,7 +215,7 @@ export async function runLoad(args: LoadArgs, io: LoadIo): Promise<LoadOutcome> 
   const accountId = args.accountId.toLowerCase();
 
   // Guards first: the roster and the sink are not touched before they pass.
-  const { header, records, unreadableLines } = readLedgerDir(
+  const { header, runDate, records, unreadableLines } = readLedgerDir(
     args.ledgerDir,
     io.repoRoots,
     accountId,
@@ -212,7 +225,7 @@ export async function runLoad(args: LoadArgs, io: LoadIo): Promise<LoadOutcome> 
   const okCells = new Set(records.filter((r) => r.status === 'ok').map((r) => r.cellKey)).size;
   if (okCells === 0) throw new GuardError('the ledger has no ok cell: nothing to load');
 
-  const now = io.now ?? new Date();
+  const now = runDate;
   const roster = await io.loadRoster({
     unknownStartDates: args.unknownStartDates,
     agencyDomains: args.agencyDomains,
@@ -264,7 +277,7 @@ export async function runLoad(args: LoadArgs, io: LoadIo): Promise<LoadOutcome> 
   print(
     `ledger cells: ${sortedLine(cellsByStatus)}   unreadable lines: ${unreadableLines}   ok cells: ${okCells}`,
   );
-  print(`run date (period clamp): ${base.runDay}`);
+  print(`run date (period clamp, from the ledger header): ${base.runDay}`);
   print(
     `mentions resolved: ${counts.mentions}   duplicate claims inside a document: ${counts.duplicateClaims}`,
   );

@@ -500,6 +500,7 @@ describe('dynamic: the ledger loader with the client module poisoned', () => {
         path.join(dir, 'header.json'),
         JSON.stringify({
           v: 1,
+          createdAt: '2026-11-20T00:00:00.000Z',
           signature: sig,
           extractorVersion: version,
           sample: { fileIds: [] },
