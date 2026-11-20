@@ -16,6 +16,11 @@
 # and the dev one is retired with cloudbuild/dev.yaml.
 # Only dev is ported — staging/prod arms fail loudly until provisioned.
 
+# D37 step 1 (bpriddy/gcp-universal-backend#221): there is no push trigger.
+# Every run deploys into os-test-491819, which is UB prod (its services keep
+# their -dev names), so the deploying job runs in the GitHub Environment
+# `prod`: main only, approved by bpriddy. Its variables shadow the repo ones.
+
 name: Deploy
 
 on:
@@ -26,8 +31,6 @@ on:
         type: choice
         default: dev
         options: [dev, staging, prod]
-  push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -70,6 +73,7 @@ jobs:
 
   deploy:
     needs: check
+    environment: prod
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
