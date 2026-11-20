@@ -12,8 +12,15 @@ node dist/src/casting/t3/pilot-main.js \
   --account-id <uuid> --window-start 2021-11-19 \
   --sample-size 120 --sample-seed <string> \
   --variant base --model gemini-3.5-flash --thinking LOW --parallel 2 \
-  --read-text --ledger-dir /abs/path/outside/the/repo
+  --read-text --ledger-dir /abs/path/outside/the/repo \
+  [--unknown-start-date YYYY-MM-DD ...]
 ```
+
+`--unknown-start-date` (repeatable, optional, same meaning as in the T2 stage) names a `staff.started_at`
+value that is an import placeholder, not a hire date: the employment-window gate is skipped for such
+rows when the roster resolves people. It only changes the in-memory resolve step, never a model call, so
+it is **not** part of the ledger signature (an existing ledger stays resumable with or without it).
+Default: none.
 
 It lists the account's Drive tree (read-only), runs the stage's shortlist step (window, tiers,
 version collapse, identical-content copies), draws the sample, prints the `PROPOSAL` block first and

@@ -231,6 +231,33 @@ describe('argument guards (parsePilotArgs)', () => {
     expect(() => args('--max-cell', '5')).toThrow(/unknown flag/);
     expect(() => args('--sample-size', '0')).toThrow(/sample-size/);
   });
+
+  it('--unknown-start-date: absent = [], accepted, repeatable, deduplicated', () => {
+    expect(args().unknownStartDates).toEqual([]);
+    expect(args('--unknown-start-date', '2000-01-01').unknownStartDates).toEqual(['2000-01-01']);
+    expect(
+      args(
+        '--unknown-start-date',
+        '2000-01-01',
+        '--unknown-start-date',
+        '2001-02-03',
+        '--unknown-start-date',
+        '2000-01-01',
+      ).unknownStartDates,
+    ).toEqual(['2000-01-01', '2001-02-03']);
+  });
+
+  it('--unknown-start-date: a bad or missing value is refused', () => {
+    expect(() => args('--unknown-start-date', '2000-1-1')).toThrow(/YYYY-MM-DD/);
+    expect(() => args('--unknown-start-date', '2000-13-45')).toThrow(/YYYY-MM-DD/);
+    expect(() => args('--unknown-start-date', 'later')).toThrow(/YYYY-MM-DD/);
+    expect(() => args('--unknown-start-date')).toThrow(/needs a value/);
+    expect(() => args('--unknown-start-date', '--parallel', '2')).toThrow(/needs a value/);
+  });
+
+  it('--unknown-start-date is a roster option: it is not part of the ledger signature', () => {
+    expect(signatureOf(args('--unknown-start-date', '2000-01-01'))).toEqual(signatureOf(args()));
+  });
 });
 
 describe('dry-run (the default)', () => {
@@ -246,6 +273,28 @@ describe('dry-run (the default)', () => {
     expect(h.spies.makeReader).not.toHaveBeenCalled();
     expect(fs.existsSync(dir)).toBe(false);
     expect(h.llm.calls).toHaveLength(0);
+  });
+
+  it('hands --unknown-start-date to the roster loader; none = an empty list', async () => {
+    const h = harness(synth(60));
+    const loadRoster = vi.fn(async () => buildRosterIndex([]));
+    const io: PilotIo = { ...h.io, loadRoster };
+    await runPilot(args('--sample-size', '20'), io);
+    await runPilot(
+      args(
+        '--sample-size',
+        '20',
+        '--unknown-start-date',
+        '2000-01-01',
+        '--unknown-start-date',
+        '2001-02-03',
+      ),
+      io,
+    );
+    expect(loadRoster.mock.calls).toEqual([
+      [{ unknownStartDates: [] }],
+      [{ unknownStartDates: ['2000-01-01', '2001-02-03'] }],
+    ]);
   });
 
   it('prints the sample, its seed and the per-class counts', async () => {
@@ -394,6 +443,16 @@ describe('apply (mocked model only)', () => {
     expect(h.llm.calls).toHaveLength(20);
     expect(h.printed.join('\n')).toMatch(/already done in the ledger: 20   to run: 0/);
     expect(h.printed.join('\n')).toContain('[resumed: cells taken from the ledger header]');
+  });
+
+  it('resumes an existing ledger when only --unknown-start-date differs', async () => {
+    const h = harness(synth(60));
+    const dir = path.join(ledgers, 'p1');
+    await runPilot(applyArgs(dir, 20), h.io);
+    const callsBefore = h.llm.calls.length;
+    const out = await runPilot(applyArgs(dir, 20, ['--unknown-start-date', '2000-01-01']), h.io);
+    expect(out.exitCode).toBe(PILOT_EXIT.ok);
+    expect(h.llm.calls).toHaveLength(callsBefore);
   });
 
   it('another seed or configuration on the same directory is refused', async () => {

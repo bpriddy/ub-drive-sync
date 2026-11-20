@@ -8,7 +8,8 @@
  * model client anywhere in its import closure (a test walks it).
  */
 import type { TraversedFile } from '../../drive/types';
-import type { RosterIndex } from '../identity';
+import type { RosterEntry, RosterIndex } from '../identity';
+import { buildT2Roster } from '../t2/roster';
 import { toCandidates } from './listing-candidates';
 import type { T3Candidate } from './types';
 
@@ -37,15 +38,33 @@ export async function loadAccountCandidates(accountId: string): Promise<T3Candid
   return toCandidates(walked, accountId);
 }
 
-export async function loadRosterIndex(): Promise<RosterIndex> {
+export interface PilotRosterOptions {
+  readonly unknownStartDates: readonly string[];
+}
+
+/** Pure part of the roster wiring: the env domains plus the placeholder dates, built the T2 way. */
+export function buildPilotRoster(
+  entries: readonly RosterEntry[],
+  agencyDomains: readonly string[],
+  options: PilotRosterOptions,
+): RosterIndex {
+  // Shared with T2: sets `unknownStartDates` and probes that the identity module honours it.
+  return buildT2Roster(entries, {
+    agencyDomains,
+    unknownStartDates: options.unknownStartDates,
+  });
+}
+
+export async function loadRosterIndex(
+  options: PilotRosterOptions = { unknownStartDates: [] },
+): Promise<RosterIndex> {
   const { prisma } = await import('../../prisma');
   const { loadRoster } = await import('../t1/pg-adapters');
-  const { buildRosterIndex } = await import('../identity');
   const domains = (process.env['CASTING_AGENCY_EMAIL_DOMAINS'] ?? '')
     .split(',')
     .map((d) => d.trim().toLowerCase())
     .filter((d) => d.length > 0);
-  return buildRosterIndex(await loadRoster(prisma), { agencyEmailDomains: domains });
+  return buildPilotRoster(await loadRoster(prisma), domains, options);
 }
 
 export async function closeRealIo(): Promise<void> {

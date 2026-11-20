@@ -30,7 +30,7 @@ export function realIo(): PilotIo {
   return {
     loadCandidates: async (accountId) =>
       (await import('./real-pilot-io')).loadAccountCandidates(accountId),
-    loadRoster: async () => (await import('./real-pilot-io')).loadRosterIndex(),
+    loadRoster: async (options) => (await import('./real-pilot-io')).loadRosterIndex(options),
     makeReader: () => reader,
     makeLlm: async () => (await import('./real-llm')).createRealLlm(),
     makeSink: () => new MemorySink(),
