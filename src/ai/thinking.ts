@@ -36,6 +36,7 @@ const CALL_TYPES: ReadonlyArray<readonly [prefix: string, callType: string]> = [
   ['drive.piece_derive.', 'piece_derive'],
   ['drive.field_heal.', 'heal'],
   ['drive.new_entity_extraction.', 'discover'],
+  ['drive.vision_extraction.', 'vision'],
 ];
 
 /** The short call-type name of a tag, or null for a tag outside the table. */

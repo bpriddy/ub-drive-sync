@@ -278,6 +278,38 @@ entire transaction rolls back — production stays strict, enforced by the DB
 (not by `NODE_ENV`, which is `production` on the deployed dev job). Local
 equivalent: `npm run clear -- --account-id <uuid>` (same shared code path).
 
+## Vision eval (`eval-vision`)
+
+`scripts/eval-vision.ts` compares, on a local directory of PDFs, the text layer
+with two vision transcriptions (`DRIVE_VISION_PDF`): the pages alone, and the
+pages with the text layer, which is what the scan sends. Each PDF may have an
+optional `<id>.gold.json` of facts that must and must not appear
+(`{"must_include": [...], "must_not_include": [...]}`). No Drive access. A real
+run reads the prompt from the `drive.vision_extraction.v1` preset (needs
+`DATABASE_URL`) or from a template file (`--preset-file`), and stages each PDF
+in `DRIVE_VISION_STAGING_BUCKET` like the scan does; `--plan` and the mock
+driver touch neither.
+
+```bash
+# $0: count pages and print the call count and cost estimate; no model client is loaded
+npm run eval-vision -- run --fixtures ~/vision-pdfs --plan
+
+# PAID: two Gemini calls per PDF the caps admit (pages alone, pages plus text).
+# Needs an explicit go, and always --max-usd.
+npm run eval-vision -- run --fixtures ~/vision-pdfs --out ~/vision-eval --max-usd 1
+
+# $0: re-score a saved run after fixing the gold files
+npm run eval-vision -- score --fixtures ~/vision-pdfs --run ~/vision-eval/eval-vision-<time>.json
+```
+
+The script refuses fixtures or outputs inside the repository (transcriptions
+are customer content); `scripts/eval-vision-example/` holds a synthetic PDF to
+try `--plan` on. A call starts only if one attempt at its full output allowance
+still fits under `--max-usd`; the PDF's own tokens are counted from its page
+count and the text layer's from its length. The report lists the three arms side
+by side and the mean recall of each, so it shows whether sending the text
+helps.
+
 ## Ideas eval (`eval-ideas`)
 
 `scripts/eval-ideas.ts` measures the ideas pipeline against a hand-labelled

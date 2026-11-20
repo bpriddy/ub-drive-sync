@@ -15,7 +15,8 @@
  *     without a content marker.
  *   - "bin:" + sha256 of Drive's content marker (md5Checksum, else
  *     headRevisionId, else version), GEMINI_MAX_INPUT_CHARS, the name, the
- *     path, the zone and the ideas flag. Used for downloaded files (PDF,
+ *     path, the zone and the ideas flag, and for a PDF that vision reads
+ *     (DRIVE_VISION_PDF) a vision marker. Used for downloaded files (PDF,
  *     Office, text), and it is known BEFORE the download.
  *
  * The ideas tier reads the WHOLE text (idea extraction has no 40k cut). When
@@ -44,6 +45,7 @@ import { config } from '../config';
 import type { EntityAttribution } from '../drive/structure';
 import type { TraversedFile } from '../drive/types';
 import { isDownloadedMime } from '../drive/extract';
+import { isVisionPdf, VISION_HASH_MARKER } from '../drive/vision-gate';
 import { promptFileText } from '../drive/prompt-text';
 
 /** Bump to re-interpret every file once: a prompt, model or extractor change. */
@@ -116,6 +118,10 @@ export function binaryContentHash(
     file.path,
     zone,
     ideasOn,
+    // Only a PDF vision will read (DRIVE_VISION_PDF on, within the caps) gets
+    // the marker: every other hash is byte-identical to the one without it,
+    // so turning the flag on re-reads a touched PDF once and nothing else.
+    ...(isVisionPdf(file) ? [VISION_HASH_MARKER] : []),
   ])}`;
 }
 

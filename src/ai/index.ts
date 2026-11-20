@@ -1,4 +1,5 @@
-export { runPreset, parseLlmJson } from './prompt-preset.service';
+export { runPreset, runLoadedPreset, loadPreset, parseLlmJson } from './prompt-preset.service';
+export type { LoadedPreset } from './prompt-preset.service';
 export { defaultLlm } from './gemini.client';
 export { embedTexts, defaultEmbedder, EMBEDDING_MODEL, EMBEDDING_DIM } from './embed';
 export type { EmbeddingDriver } from './embed';

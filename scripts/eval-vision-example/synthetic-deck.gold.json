@@ -1,0 +1,4 @@
+{
+  "must_include": ["Synthetic quarterly review", "Second page heading"],
+  "must_not_include": ["invented figure 999"]
+}

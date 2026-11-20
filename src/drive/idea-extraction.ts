@@ -26,7 +26,9 @@
 import { z } from 'zod';
 import { SchemaType, type ResponseSchema } from '../ai';
 import { defaultLlm, parseLlmJson, DEFAULT_GEMINI_MODEL } from '../ai';
+import { config } from '../config';
 import { logger } from '../logger';
+import { MARKER_GRAMMAR_PROMPT_NOTE } from './extract-markers';
 import type { TraversedFile } from './types';
 
 const MODEL = DEFAULT_GEMINI_MODEL;
@@ -70,7 +72,11 @@ const ResponseSchemaZ = z.object({
 const RESPONSE_SCHEMA: ResponseSchema = {
   type: SchemaType.OBJECT,
   properties: {
-    deck_type: { type: SchemaType.STRING, enum: ['pitch', 'creative_review', 'other'], format: 'enum' },
+    deck_type: {
+      type: SchemaType.STRING,
+      enum: ['pitch', 'creative_review', 'other'],
+      format: 'enum',
+    },
     ideas: {
       type: SchemaType.ARRAY,
       items: {
@@ -85,6 +91,19 @@ const RESPONSE_SCHEMA: ResponseSchema = {
   },
   required: ['deck_type', 'ideas'],
 };
+
+/**
+ * The note on the marker grammar, for text that may come from vision. Only
+ * while DRIVE_VISION_PDF is on: off, the prompt is byte-for-byte the one
+ * before vision existed.
+ */
+function markerNote(): string {
+  if (config.DRIVE_VISION_PDF !== 'on') return '';
+  return `
+NOTE ON FILE CONTENT: ${MARKER_GRAMMAR_PROMPT_NOTE}
+For idea mining that means a [bracketed] creative visual can itself be the idea or carry its facets — a described key visual, poster, or chart is content the deck's authors presented, exactly like the copy around it. Do NOT discard bracketed lines, and treat "## Page N" in a PDF export the same as "## Slide N" in a native deck. The markers change nothing about the gate below: what counts as a pitch or creative-review deck is unchanged.
+`;
+}
 
 function buildPrompt(args: {
   accountName: string | null;
@@ -102,7 +121,7 @@ FILE CONTENT:
 """
 ${args.fileText}
 """
-
+${markerNote()}
 STEP 1 — WHAT KIND OF DECK IS THIS?  (deck_type)
 Ideas live in exactly TWO kinds of artifact, and NOWHERE else:
   - "pitch"           — a PITCH DECK: creative concepts proposed to win or answer a brief (new business, an RFP response, a concept round against a client brief).
