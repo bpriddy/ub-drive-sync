@@ -126,7 +126,7 @@ roster by the stage's own function (`resolveLedgerRecords`, the one `runT3` uses
 and the same identical-content copy expansion (the `copy` lines the pilot recorded in the ledger give
 the kept to copies mapping; copies get rows for $0 under their own file, account and job number).
 Rows carry the ledger's extractor version (`t3-<prompt>:<model>:<thinking>`), the purge key of that
-configuration. The period clamp uses the run date of the load (printed). The dry-run prints cells by
+configuration. The period clamp uses the date of the pilot run, `header.createdAt` (printed; a header without a usable `createdAt` is refused, there is no fallback to today). The dry-run prints cells by
 status, mentions, copies, rows by `person_kind` and `withheld_reason`, duplicates by `claim_hash`
 and the rows to write; no names, quotes or file ids.
 
