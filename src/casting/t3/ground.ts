@@ -7,9 +7,12 @@
  *    name and role) and counted, so the stored quote is always real text.
  *  - Where the quote sits gives `location` ("slide 4", "sheet: Staffing"),
  *    taken from the extractor's own markers, never from the model.
+ *  - A grounded quote over the stored cap is cut only after these checks, at a
+ *    word boundary, so it stays an excerpt of the text.
  *
  * Both rates are label-free quality proxies for the pilot report.
  */
+import { EVIDENCE_QUOTE_MAX_CHARS } from './row';
 import type { RawMention } from './schema';
 
 const SPECIAL: Readonly<Record<string, string>> = {
@@ -86,6 +89,15 @@ export function locationOf(text: string, quote: string | null): string | null {
   return null;
 }
 
+/** Cut to `max` chars at the last whitespace; a single over-long word is cut hard. */
+export function cutQuote(quote: string, max: number = EVIDENCE_QUOTE_MAX_CHARS): string {
+  if (quote.length <= max) return quote;
+  const head = quote.slice(0, max);
+  if (/\s/.test(quote.charAt(max))) return head.trimEnd();
+  const lastSpace = head.search(/\s\S*$/);
+  return (lastSpace > 0 ? head.slice(0, lastSpace) : head).trimEnd();
+}
+
 export interface GroundingStats {
   droppedUngroundedName: number;
   quoteDroppedUngrounded: number;
@@ -112,7 +124,8 @@ export function groundMentions(
       quote = null;
       stats.quoteDroppedUngrounded++;
     }
-    out.push({ ...m, quote, location: locationOf(text, quote) });
+    const location = locationOf(text, quote);
+    out.push({ ...m, quote: quote === null ? null : cutQuote(quote), location });
   }
   return { mentions: out, stats };
 }

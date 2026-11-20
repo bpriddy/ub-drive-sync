@@ -6,7 +6,15 @@ import {
   mentionsResponseSchema,
   parseMentionsResponse,
 } from '../schema';
-import { foldForMatch, groundMentions, locationOf, nameIsGrounded, groundingOf } from '../ground';
+import {
+  cutQuote,
+  foldForMatch,
+  groundMentions,
+  groundingOf,
+  locationOf,
+  nameIsGrounded,
+  quoteIsGrounded,
+} from '../ground';
 import { parsePeriod } from '../period';
 import { CREDITS_DECK } from './helpers';
 
@@ -99,7 +107,7 @@ describe('parseMentionsResponse', () => {
     expect(r.ok && r.stats.droppedUrlOrId).toBe(4);
   });
 
-  it('redacts a link inside a quote and caps the quote at 300 characters', () => {
+  it('redacts a link inside a quote and counts, but does not cut, a quote over 300 characters', () => {
     const r = parseMentionsResponse(
       wrap([
         item({ quote: 'Producer Jane Roe, see https://example.test/x?y=1 for more' }),
@@ -107,7 +115,7 @@ describe('parseMentionsResponse', () => {
       ]),
     );
     expect(r.ok && r.mentions[0]?.quote).toBe('Producer Jane Roe, see [link] for more');
-    expect(r.ok && r.mentions[1]?.quote).toHaveLength(300);
+    expect(r.ok && r.mentions[1]?.quote).toHaveLength(500);
     expect(r.ok && r.stats.quoteLinkRedacted).toBe(1);
     expect(r.ok && r.stats.quoteTruncated).toBe(1);
   });
@@ -159,6 +167,36 @@ describe('grounding', () => {
     expect(out.mentions[1]?.quote).toBeNull();
     expect(out.mentions[1]?.location).toBeNull();
     expect(out.stats).toEqual({ droppedUngroundedName: 1, quoteDroppedUngrounded: 1 });
+  });
+
+  it('grounds a long quote before cutting it, then cuts it at a word boundary', () => {
+    const words = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+    const text = `## Slide 3\nExecutive Producer Zofia Marek-Lindqvist ${words}\n`;
+    const quote = `Executive Producer Zofia Marek-Lindqvist ${words}`;
+    expect(quote.length).toBeGreaterThan(300);
+    const out = groundMentions(text, [
+      {
+        rawName: 'Zofia Marek-Lindqvist',
+        rawRole: 'Executive Producer',
+        quote,
+        isClientSide: false,
+        periodText: null,
+      },
+    ]);
+    const kept = out.mentions[0]?.quote ?? '';
+    expect(out.stats.quoteDroppedUngrounded).toBe(0);
+    expect(kept.length).toBeLessThanOrEqual(300);
+    expect(quote.startsWith(kept)).toBe(true);
+    expect(quote.charAt(kept.length)).toBe(' ');
+    expect(quoteIsGrounded(groundingOf(text), kept)).toBe(true);
+    expect(out.mentions[0]?.location).toBe('slide 3');
+  });
+
+  it('cutQuote keeps short quotes, cuts at the last space, and hard-cuts one long word', () => {
+    expect(cutQuote('Jane Roe', 300)).toBe('Jane Roe');
+    expect(cutQuote('alpha beta gamma', 13)).toBe('alpha beta');
+    expect(cutQuote('alpha beta gamma', 10)).toBe('alpha beta');
+    expect(cutQuote('x'.repeat(20), 10)).toBe('x'.repeat(10));
   });
 
   it('locates a sheet tab and ignores documents without markers', () => {
