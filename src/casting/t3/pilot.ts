@@ -72,7 +72,8 @@ export class GuardError extends Error {
 
 export interface PilotIo {
   loadCandidates(accountId: string): Promise<readonly T3Candidate[]>;
-  loadRoster(): Promise<RosterIndex>;
+  /** `unknownStartDates` is the pilot's roster option (empty = none); it never reaches a model call. */
+  loadRoster(options: { readonly unknownStartDates: readonly string[] }): Promise<RosterIndex>;
   /** Called only when text is needed: dry-run with --read-text, or apply. */
   makeReader(): DocumentReader;
   /** Called only in apply, by the stage, after every guard passed. */
@@ -313,7 +314,7 @@ export async function runPilot(args: PilotArgs, io: PilotIo): Promise<PilotOutco
     for (const copy of selection.copiesOf.get(id) ?? []) stageCandidates.push(copy.candidate);
   }
 
-  const roster = await io.loadRoster();
+  const roster = await io.loadRoster({ unknownStartDates: args.unknownStartDates });
   const needsText = apply || args.readText;
   const recorder = new RecordingReader(needsText ? io.makeReader() : unusedReader);
   // A dry-run never opens a ledger it would have to create; an existing one is read for the resume view.

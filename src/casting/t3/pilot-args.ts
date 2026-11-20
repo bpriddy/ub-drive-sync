@@ -6,6 +6,9 @@
  *   --account-id UUID       the one account of the pilot
  *   --sample-size N         cells to draw from the kept shortlist (default 120)
  *   --sample-seed STRING    required; recorded in the ledger header
+ *   --unknown-start-date D  repeatable (YYYY-MM-DD); a staff.started_at that is an import placeholder,
+ *                           not a hire date (same meaning as in the T2 stage). Roster-only: it is not
+ *                           part of the ledger signature (it never reaches a model call)
  *
  * Unknown flags are errors: a mistyped `--max-cell` must not silently mean "no limit".
  */
@@ -18,12 +21,15 @@ export interface PilotArgs extends T3Args {
   readonly accountId: string;
   readonly sampleSize: number;
   readonly sampleSeed: string;
+  /** Roster option only (see the header); default empty = no behaviour change. */
+  readonly unknownStartDates: readonly string[];
 }
 
 const KNOWN_FLAGS: ReadonlySet<string> = new Set([
   '--account-id',
   '--sample-size',
   '--sample-seed',
+  '--unknown-start-date',
   '--window-start',
   '--variant',
   '--model',
@@ -38,9 +44,13 @@ const KNOWN_FLAGS: ReadonlySet<string> = new Set([
 ]);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ISO = /^\d{4}-\d{2}-\d{2}$/;
+// Same check as the T2 and fusion parsers.
+const isIsoDate = (v: string): boolean => ISO.test(v) && !Number.isNaN(Date.parse(v));
 
 export function parsePilotArgs(argv: readonly string[]): PilotArgs {
   const flags = new Map<string, string | true>();
+  const unknownStartDates: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
     if (!a.startsWith('--')) throw new Error(`unexpected argument ${a}`);
@@ -48,7 +58,13 @@ export function parsePilotArgs(argv: readonly string[]): PilotArgs {
     const next = argv[i + 1];
     if (next !== undefined && !next.startsWith('--')) {
       flags.set(a, next);
+      if (a === '--unknown-start-date') {
+        if (!isIsoDate(next)) throw new Error('--unknown-start-date must be YYYY-MM-DD');
+        if (!unknownStartDates.includes(next)) unknownStartDates.push(next);
+      }
       i++;
+    } else if (a === '--unknown-start-date') {
+      throw new Error('--unknown-start-date needs a value');
     } else flags.set(a, true);
   }
   const value = (k: string): string | undefined => {
@@ -83,5 +99,5 @@ export function parsePilotArgs(argv: readonly string[]): PilotArgs {
       );
     }
   }
-  return { ...base, accountId, sampleSize, sampleSeed };
+  return { ...base, accountId, sampleSize, sampleSeed, unknownStartDates };
 }

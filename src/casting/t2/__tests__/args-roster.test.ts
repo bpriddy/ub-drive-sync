@@ -84,7 +84,9 @@ describe('buildT2Roster', () => {
         (o as { unknownStartDates?: readonly string[] } | undefined)?.unknownStartDates ?? [],
       );
       return buildRosterIndex(
-        e.map((x) => (unknown.has(x.startedAt) ? { ...x, startedAt: '1900-01-01' } : x)),
+        e.map((x) =>
+          x.startedAt !== null && unknown.has(x.startedAt) ? { ...x, startedAt: '1900-01-01' } : x,
+        ),
         { agencyEmailDomains: o?.agencyEmailDomains },
       );
     };
