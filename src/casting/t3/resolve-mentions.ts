@@ -33,7 +33,15 @@ import {
   type EvidenceRowShape,
 } from './row';
 import { clampToRunDate, parsePeriodText, runDay } from './period';
-import { newCopyCounts, type CopyCounts } from './copies';
+import {
+  addDecision,
+  buildCopyIndex,
+  decideCopies,
+  newCopyCounts,
+  type CopyCounts,
+  type CopyEdge,
+} from './copies';
+import type { CellRecord } from './ledger';
 import type { GroundedMention } from './ground';
 import { T3_SOURCE, type T3Candidate } from './types';
 
@@ -145,4 +153,83 @@ export function mentionsToDrafts(input: ResolveDocInput, counts: ResolveCounts):
     });
   }
   return out;
+}
+
+/** The newest ok record of each cell; `keys` null = every cell. */
+export function latestOk(
+  records: readonly CellRecord[],
+  keys: ReadonlySet<string> | null,
+): CellRecord[] {
+  const byKey = new Map<string, CellRecord>();
+  for (const r of records) {
+    if (r.status === 'ok' && (keys === null || keys.has(r.cellKey))) byKey.set(r.cellKey, r);
+  }
+  return [...byKey.values()];
+}
+
+export interface ResolveLedgerInput {
+  readonly roster: RosterIndex;
+  readonly contextFor?: ((accountId: string) => ResolutionContext | undefined) | undefined;
+  /** The run date: limits the stored period (see period.ts). */
+  readonly now: Date;
+  /** md5 copies of the current selection (the ledger's own `copy` lines are always used). */
+  readonly selectionEdges: readonly CopyEdge[];
+  /** Cells to resolve; null = every ok cell of the ledger. */
+  readonly selectedKeys: ReadonlySet<string> | null;
+}
+
+/**
+ * The stage's resolve step over saved ledger cells ($0, no model): the rows of every ok
+ * cell, then the rows of its identical-content copies (the kept file's mentions, the
+ * copy's own file, account and project reference). Shared by the stage's apply and
+ * dry-run preview and by the ledger loader, so both build the same rows. Rows are
+ * stamped with the ledger record's own extractor version, never the current code's.
+ */
+export function resolveLedgerRecords(
+  records: readonly CellRecord[],
+  input: ResolveLedgerInput,
+  counts: ResolveCounts,
+): EvidenceDraft[] {
+  const drafts: EvidenceDraft[] = [];
+  const index = buildCopyIndex(records, input.selectionEdges);
+  for (const rec of latestOk(records, input.selectedKeys)) {
+    const common = {
+      docType: rec.docType ?? 'other',
+      mentions: rec.mentions,
+      index: input.roster,
+      extractorVersion: rec.extractorVersion,
+      now: input.now,
+    };
+    drafts.push(
+      ...mentionsToDrafts(
+        {
+          ...common,
+          candidate: rec.candidate,
+          context: input.contextFor?.(rec.candidate.accountId),
+        },
+        counts,
+      ),
+    );
+    // Identical-content copies: the kept file's mentions, the copy's own file and context.
+    const decision = decideCopies(rec.candidate.fileId, index.get(rec.cellKey) ?? []);
+    addDecision(counts.copies, decision);
+    for (const copy of decision.expand) {
+      const rows = mentionsToDrafts(
+        {
+          ...common,
+          candidate: {
+            fileId: copy.fileId,
+            accountId: copy.accountId,
+            createdTime: copy.createdTime,
+            projectRef: copy.projectRef,
+          },
+          context: input.contextFor?.(copy.accountId),
+        },
+        counts,
+      );
+      counts.copies.rows += rows.length;
+      drafts.push(...rows);
+    }
+  }
+  return drafts;
 }

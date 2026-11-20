@@ -15,6 +15,13 @@ export const T3_PROMPT_VERSION = 'v1';
 /** Layer 1 `source` value written by this stage. */
 export const T3_SOURCE = 'drive_content' as const;
 
+/**
+ * `sync_runs.source` of a T3 write (the ledger loader). Consistent with T1 'casting_t1' and
+ * T2 'casting_t2'. [VERIFY: gub-schemas 1.23.0 has no CHECK or enum on sync_runs.source; the D3
+ * record in gcp-universal-backend needs a line for this value.]
+ */
+export const T3_SYNC_SOURCE = 'casting_t3';
+
 /** The only parallelism this stage allows (README rule 9: 429s on reads and on the model). */
 export const T3_MAX_PARALLEL = 2;
 

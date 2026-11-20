@@ -46,7 +46,7 @@ import {
 import { priceOf } from './pricing';
 import type { EvidenceDraft } from './row';
 import { buildPrompt } from './prompt';
-import { newResolveCounts, mentionsToDrafts, type ResolveCounts } from './resolve-mentions';
+import { newResolveCounts, resolveLedgerRecords, type ResolveCounts } from './resolve-mentions';
 import { mentionsResponseSchema, parseMentionsResponse, type SanitizeStats } from './schema';
 import type { T3Sink } from './sink';
 import { fitToCap } from './truncate';
@@ -359,50 +359,18 @@ export async function runT3(
   const resolveFromLedger = (
     records: readonly CellRecord[],
     counts: ResolveCounts,
-  ): EvidenceDraft[] => {
-    const drafts: EvidenceDraft[] = [];
-    const index = buildCopyIndex(records, selectionEdges);
-    for (const rec of latestOk(records, selectedKeys)) {
-      const common = {
-        docType: rec.docType ?? 'other',
-        mentions: rec.mentions,
-        index: deps.roster,
-        extractorVersion: rec.extractorVersion,
+  ): EvidenceDraft[] =>
+    resolveLedgerRecords(
+      records,
+      {
+        roster: deps.roster,
+        contextFor: deps.contextFor,
         now,
-      };
-      drafts.push(
-        ...mentionsToDrafts(
-          {
-            ...common,
-            candidate: rec.candidate,
-            context: deps.contextFor?.(rec.candidate.accountId),
-          },
-          counts,
-        ),
-      );
-      // Identical-content copies: the kept file's mentions, the copy's own file and context.
-      const decision = decideCopies(rec.candidate.fileId, index.get(rec.cellKey) ?? []);
-      addDecision(counts.copies, decision);
-      for (const copy of decision.expand) {
-        const rows = mentionsToDrafts(
-          {
-            ...common,
-            candidate: {
-              fileId: copy.fileId,
-              accountId: copy.accountId,
-              createdTime: copy.createdTime,
-              projectRef: copy.projectRef,
-            },
-            context: deps.contextFor?.(copy.accountId),
-          },
-          counts,
-        );
-        counts.copies.rows += rows.length;
-        drafts.push(...rows);
-      }
-    }
-    return drafts;
-  };
+        selectionEdges,
+        selectedKeys,
+      },
+      counts,
+    );
 
   if (mode === 'dry-run') {
     const counts = newResolveCounts();
@@ -675,13 +643,6 @@ export async function runT3(
       syncRunId,
     },
   };
-}
-
-/** The newest ok record of each selected cell. */
-function latestOk(records: readonly CellRecord[], keys: ReadonlySet<string>): CellRecord[] {
-  const byKey = new Map<string, CellRecord>();
-  for (const r of records) if (r.status === 'ok' && keys.has(r.cellKey)) byKey.set(r.cellKey, r);
-  return [...byKey.values()];
 }
 
 const errText = (err: unknown): string =>

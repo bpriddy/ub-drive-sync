@@ -40,6 +40,8 @@ export async function loadAccountCandidates(accountId: string): Promise<T3Candid
 
 export interface PilotRosterOptions {
   readonly unknownStartDates: readonly string[];
+  /** Extra agency e-mail domains (the ledger loader's `--agency-domain`); added to the env list. */
+  readonly agencyDomains?: readonly string[] | undefined;
 }
 
 /** Pure part of the roster wiring: the env domains plus the placeholder dates, built the T2 way. */
@@ -60,10 +62,11 @@ export async function loadRosterIndex(
 ): Promise<RosterIndex> {
   const { prisma } = await import('../../prisma');
   const { loadRoster } = await import('../t1/pg-adapters');
-  const domains = (process.env['CASTING_AGENCY_EMAIL_DOMAINS'] ?? '')
+  const fromEnv = (process.env['CASTING_AGENCY_EMAIL_DOMAINS'] ?? '')
     .split(',')
     .map((d) => d.trim().toLowerCase())
     .filter((d) => d.length > 0);
+  const domains = [...new Set([...fromEnv, ...(options.agencyDomains ?? [])])];
   return buildPilotRoster(await loadRoster(prisma), domains, options);
 }
 

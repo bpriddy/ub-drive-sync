@@ -34,9 +34,12 @@ import {
 import {
   assertOutsideRepo,
   extractorVersionOf,
+  GuardError,
   MemoryLedger,
+  PILOT_HEADER_FILE,
   type CellConfigSignature,
   type Ledger,
+  type LedgerHeader,
 } from './ledger';
 import { MODEL_PRICES, priceOf } from './pricing';
 import { formatProposal } from './proposal';
@@ -57,18 +60,13 @@ export const PILOT_CAP_CHARS = 40_000;
 /** [ASSUME: 10000] length of a cell that was not read (apply preview only); S5a measured about 10k for this account. */
 export const PILOT_FALLBACK_CHARS = 10_000;
 
-export const PILOT_HEADER_FILE = 'header.json';
+// Defined in ledger.ts (hermetic: no model code) so the ledger loader can use them without
+// importing this file; re-exported here for the callers that always had them from the pilot.
+export { GuardError, PILOT_HEADER_FILE };
+export type { LedgerHeader };
 
 /** Process exit codes. A dry-run exits 3 on purpose: "printed, nothing started". */
 export const PILOT_EXIT = { ok: 0, failed: 1, refused: 2, dryRun: 3, stopped: 4 } as const;
-
-/** A guard refused: nothing was started, no model client exists. */
-export class GuardError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'GuardError';
-  }
-}
 
 export interface PilotIo {
   loadCandidates(accountId: string): Promise<readonly T3Candidate[]>;
@@ -89,21 +87,6 @@ export interface PilotIo {
 }
 
 // ---- ledger header and directory guard -------------------------------------------------
-
-export interface LedgerHeader {
-  readonly v: 1;
-  readonly createdAt: string;
-  readonly signature: Readonly<Record<string, string | number>>;
-  readonly extractorVersion: string;
-  readonly sample: {
-    readonly seed: string;
-    readonly requested: number;
-    readonly pool: number;
-    readonly poolByClass: Readonly<Record<string, number>>;
-    readonly sampleByClass: Readonly<Record<string, number>>;
-    readonly fileIds: readonly string[];
-  };
-}
 
 export function signatureOf(args: PilotArgs): Record<string, string | number> {
   return {
