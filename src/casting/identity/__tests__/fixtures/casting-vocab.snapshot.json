@@ -1,0 +1,32 @@
+{
+  "$comment": "Snapshot of the gub-schemas casting vocabularies at source commit f8cf59f (unpublished 1.23.0). Edit only when the source changes; src/casting/identity/vocab.ts must follow in the same commit.",
+  "role_norms": [
+    "executive_creative_director",
+    "creative_director",
+    "associate_creative_director",
+    "art_director",
+    "copywriter",
+    "designer",
+    "design_director",
+    "strategy_director",
+    "strategist",
+    "account_director",
+    "account_manager",
+    "account_executive",
+    "executive_producer",
+    "producer",
+    "production_manager",
+    "project_manager",
+    "technologist",
+    "data_analyst",
+    "media_planner",
+    "social_media_specialist",
+    "pr_specialist",
+    "finance",
+    "other"
+  ],
+  "seniorities": ["junior", "senior", "lead", "director", "executive"],
+  "person_kinds": ["staff", "external_unresolved", "quarantined"],
+  "withheld_reasons": ["ambiguous", "conflicting", "unconfirmed", "unresolved"],
+  "employment_start_tolerance_days": 30
+}

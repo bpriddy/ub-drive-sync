@@ -11,8 +11,9 @@
  *
  * This lists each account's Drive tree — listing only: no extraction, no
  * LLM — and writes one row per file that has no snapshot, or whose name,
- * path, mime type or modified time differs from its latest one. Unchanged
- * files get no row, so a re-run is a no-op.
+ * path, mime type or modified time differs from its latest one, or whose
+ * latest one has no created_time. Unchanged files get no row, so a re-run is a
+ * no-op.
  *
  * The listing is the flat one (drive/subtree.ts) for any root inside a
  * shared drive: about one files.list call per 1000 items of the drive, not
@@ -26,6 +27,15 @@
  * are untouched; file search reads the latest row per file and gets the
  * current name. checkDelta ignores these rows — an index row says nothing
  * about which version was last extracted.
+ *
+ * created_time: every row written since the column exists carries Drive's
+ * createdTime. Older rows have NULL, so a file whose latest row is otherwise
+ * current but has no created_time gets one more row with it (reason
+ * created_time_missing, only when the listing has a createdTime). Such a row is
+ * an ordinary index_refresh row: it must stay invisible to checkDelta and to
+ * the unchanged-content gate, which both key on that skip_reason. After it the
+ * latest row has a created_time and the file is unchanged again, so a re-run
+ * writes nothing.
  *
  * v1 left a trap in the path comparison. Its full sync scanned each account
  * from the account root, then each campaign folder again rooted at the
@@ -49,7 +59,12 @@
 import { prisma } from '../prisma';
 import { log, rule } from '../scan/output';
 import { isListingUnavailableError, listingFailureCause, probeFolder } from './client';
-import { INDEX_REFRESH_SKIP_REASON, reportSnapshotWriteFailure, writeSnapshot } from './snapshot';
+import {
+  INDEX_REFRESH_SKIP_REASON,
+  reportSnapshotWriteFailure,
+  toDateOrNull,
+  writeSnapshot,
+} from './snapshot';
 import { listSubtreeFiles } from './subtree';
 import { traverseFolder } from './traversal';
 import type { TraversedFile } from './types';
@@ -61,11 +76,14 @@ export interface LatestSnapshot {
   path: string | null;
   mimeType: string | null;
   modifiedTime: Date | null;
+  /** NULL on rows written before the column existed. */
+  createdTime: Date | null;
   campaignId: string | null;
   syncRunId: string | null;
 }
 
-export type RefreshReason = 'unindexed' | 'renamed' | 'moved' | 'modified' | 'mime_changed';
+export type RefreshReason =
+  'unindexed' | 'renamed' | 'moved' | 'modified' | 'mime_changed' | 'created_time_missing';
 
 /**
  * A row a v1 campaign scan wrote: its path is rooted at the campaign's name,
@@ -81,6 +99,8 @@ export function isLegacyCampaignRow(
 /**
  * Why this file needs a new index row, or null when its latest snapshot
  * already describes it. Name first: a rename is what file search misses.
+ * `created_time_missing` comes last: a row written for any other reason
+ * carries the created_time already.
  *
  * `accountRootedPath` stands in for `latest.path` in the move check: the
  * account-rooted path of the same v1 run, for a legacy campaign row.
@@ -96,6 +116,12 @@ export function snapshotRefreshReason(
   const driveModified = file.modifiedTime ? new Date(file.modifiedTime).getTime() : null;
   if ((latest.modifiedTime?.getTime() ?? null) !== driveModified) return 'modified';
   if ((latest.mimeType ?? null) !== file.mimeType) return 'mime_changed';
+  // `== null` also covers a row object built without the field. A listing with
+  // no usable createdTime cannot fill the gap, so it must not select the file
+  // (it would be selected again on every run).
+  if ((latest.createdTime ?? null) === null && toDateOrNull(file.createdTime) !== null) {
+    return 'created_time_missing';
+  }
   return null;
 }
 
@@ -153,7 +179,14 @@ function emptyCounts(): RefreshCounts {
     filesSeen: 0,
     rowsPlanned: 0,
     rowsWritten: 0,
-    byReason: { unindexed: 0, renamed: 0, moved: 0, modified: 0, mime_changed: 0 },
+    byReason: {
+      unindexed: 0,
+      renamed: 0,
+      moved: 0,
+      modified: 0,
+      mime_changed: 0,
+      created_time_missing: 0,
+    },
     legacyNormalized: 0,
     legacyUnresolved: 0,
     writeFailures: 0,
@@ -187,7 +220,8 @@ function describeCounts(c: RefreshCounts, confirm: boolean): string {
     .join(', ');
   return (
     `${rows} (unindexed ${r.unindexed}, renamed ${r.renamed}, moved ${r.moved}, ` +
-    `modified ${r.modified}, mime_changed ${r.mime_changed}); ` +
+    `modified ${r.modified}, mime_changed ${r.mime_changed}, ` +
+    `created_time_missing ${r.created_time_missing}); ` +
     `legacy campaign rows: ${c.legacyNormalized} normalized, ${c.legacyUnresolved} unresolved` +
     (c.writeFailures > 0 ? `; ${c.writeFailures} write failure(s) [${failures}]` : '')
   );
@@ -204,7 +238,8 @@ async function loadLatestSnapshots(fileIds: string[]): Promise<Map<string, Lates
     const rows = await prisma.$queryRaw<LatestSnapshot[]>`
       SELECT DISTINCT ON (file_id)
              file_id AS "fileId", name, path, mime_type AS "mimeType",
-             modified_time AS "modifiedTime", campaign_id AS "campaignId",
+             modified_time AS "modifiedTime", created_time AS "createdTime",
+             campaign_id AS "campaignId",
              sync_run_id AS "syncRunId"
         FROM drive_file_snapshots
        WHERE file_id = ANY(${chunk}::text[])
