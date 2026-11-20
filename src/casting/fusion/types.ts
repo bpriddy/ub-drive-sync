@@ -215,14 +215,18 @@ export interface ActivityHorizon {
 }
 
 export interface WriteCounts {
+  /** Rows of the SAME fusion_version replaced. */
   deleted: number;
+  /** Rows of ANY OTHER fusion_version removed for the account (links go with them). */
+  deletedOtherVersions: number;
   inserted: number;
   links: number;
 }
 
 /**
- * Replaces the Layer 2 output of one (fusion_version, account) in ONE transaction:
- * delete what the version wrote for the account, insert the new claims and links.
+ * Replaces the Layer 2 output of one account in ONE transaction: delete the
+ * account's rows of every OTHER fusion_version, delete its rows of this version,
+ * insert the new claims and links (links of deleted rows cascade).
  * Layer 2 is a rebuildable projection; only Layer 1 is append-only.
  */
 export interface ExperienceWriter {

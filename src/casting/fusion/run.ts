@@ -83,7 +83,13 @@ export async function runFusion(deps: FusionDeps, options: FusionOptions): Promi
   }
   const today = options.today.toISOString().slice(0, 10);
   const accounts: FusionAccountReport[] = [];
-  const counts: RunCounts = { evidenceRows: 0, deleted: 0, inserted: 0, links: 0 };
+  const counts: RunCounts = {
+    evidenceRows: 0,
+    deleted: 0,
+    deletedOtherVersions: 0,
+    inserted: 0,
+    links: 0,
+  };
 
   let runId: string | null = null;
   if (apply) {
@@ -126,6 +132,7 @@ export async function runFusion(deps: FusionDeps, options: FusionOptions): Promi
           claims: out.claims,
         });
         counts.deleted += written.deleted;
+        counts.deletedOtherVersions += written.deletedOtherVersions;
         counts.inserted += written.inserted;
         counts.links += written.links;
       }
@@ -158,7 +165,7 @@ export async function runFusion(deps: FusionDeps, options: FusionOptions): Promi
       runId as string,
       'success',
       counts,
-      `success: evidence=${counts.evidenceRows} deleted=${counts.deleted} inserted=${counts.inserted} links=${counts.links}`,
+      `success: evidence=${counts.evidenceRows} deleted=${counts.deleted} otherVersionsDeleted=${counts.deletedOtherVersions} inserted=${counts.inserted} links=${counts.links}`,
     );
   }
   return {
