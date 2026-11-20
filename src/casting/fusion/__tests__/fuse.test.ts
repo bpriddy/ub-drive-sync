@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { fuse, experienceHash, experienceId, highestSeniority, uuidFromText } from '../fuse';
+import {
+  fuse,
+  experienceHash,
+  experienceId,
+  highestSeniority,
+  uuidFromText,
+  validationLabel,
+} from '../fuse';
+import { INCOMPATIBLE_ROLE_PAIRS, SINGLE_HOLDER_ROLES } from '../constants';
 import type { FusedClaim, FusionEvidence, FusionOutput } from '../types';
-import type { RoleNorm } from '../vocab';
+import { ROLE_NORMS, type RoleNorm } from '../vocab';
 import {
   ACCOUNT,
   CAMPAIGN,
@@ -69,6 +77,25 @@ describe('a served claim', () => {
     const out = fuse(baseInput([t3('copywriter'), t1()]));
     expect(out.claims[0]?.validation).toBe('not_validated');
     expect(out.claims[0]?.row.withheldReason).toBeNull();
+  });
+
+  it('activity_checked needs a dated claim AND a T2 row; the definition S7 shares', () => {
+    expect(validationLabel('2023-01-01', '2023-12-31', true)).toBe('activity_checked');
+    expect(validationLabel('2023-01-01', null, true)).toBe('activity_checked');
+    expect(validationLabel(null, '2023-12-31', true)).toBe('activity_checked');
+    expect(validationLabel(null, null, true)).toBe('not_validated'); // undated
+    expect(validationLabel('2023-01-01', '2023-12-31', false)).toBe('not_validated'); // no T2
+    // end to end: T2 behind an undated claim does not validate it
+    const out = fuse(
+      baseInput([
+        t3('copywriter', { pieceId: null, campaignId: CAMPAIGN_LOST }),
+        t1({ pieceId: null, campaignId: CAMPAIGN_LOST }),
+        t2({ pieceId: null, campaignId: CAMPAIGN_LOST }),
+      ]),
+    );
+    expect(out.claims[0]?.row.periodStart).toBeNull();
+    expect(out.claims[0]?.tiers).toContain('T2');
+    expect(out.claims[0]?.validation).toBe('not_validated');
   });
 
   it('project type falls back from piece to campaign, and is null when nobody supplies it', () => {
@@ -236,21 +263,33 @@ describe('conflicts', () => {
     p: Partial<FusionEvidence> = {},
   ): FusionEvidence[] => [t3(role, { staffId, ...p }), t1({ staffId })];
 
-  it('two people as sole producer on overlapping periods: both withheld as conflicting', () => {
+  it('two people as sole executive producer on overlapping periods: both withheld as conflicting', () => {
     const rows = [
-      ...strong(STAFF_A, 'producer', { periodStart: '2023-01-01', periodEnd: '2023-12-31' }),
-      ...strong(STAFF_B, 'producer', { periodStart: '2023-06-01', periodEnd: '2024-03-31' }),
+      ...strong(STAFF_A, 'executive_producer', {
+        periodStart: '2023-01-01',
+        periodEnd: '2023-12-31',
+      }),
+      ...strong(STAFF_B, 'executive_producer', {
+        periodStart: '2023-06-01',
+        periodEnd: '2024-03-31',
+      }),
     ];
     const out = fuse(baseInput(rows));
-    expect(find(out, STAFF_A, 'producer')?.row.withheldReason).toBe('conflicting');
-    expect(find(out, STAFF_B, 'producer')?.row.withheldReason).toBe('conflicting');
+    expect(find(out, STAFF_A, 'executive_producer')?.row.withheldReason).toBe('conflicting');
+    expect(find(out, STAFF_B, 'executive_producer')?.row.withheldReason).toBe('conflicting');
     expect(out.metrics.claims.withheld.conflicting).toBe(2);
   });
 
-  it('producers at different times are a hand-over, not a conflict', () => {
+  it('executive producers at different times are a hand-over, not a conflict', () => {
     const rows = [
-      ...strong(STAFF_A, 'producer', { periodStart: '2020-01-01', periodEnd: '2020-12-31' }),
-      ...strong(STAFF_B, 'producer', { periodStart: '2023-01-01', periodEnd: '2023-12-31' }),
+      ...strong(STAFF_A, 'executive_producer', {
+        periodStart: '2020-01-01',
+        periodEnd: '2020-12-31',
+      }),
+      ...strong(STAFF_B, 'executive_producer', {
+        periodStart: '2023-01-01',
+        periodEnd: '2023-12-31',
+      }),
     ];
     const out = fuse(baseInput(rows));
     expect(out.claims.map((c) => c.row.withheldReason)).toEqual([null, null]);
@@ -258,15 +297,21 @@ describe('conflicts', () => {
 
   it('a weak, unconfirmed rival does not suppress a strong claim', () => {
     const rows = [
-      ...strong(STAFF_A, 'producer'),
-      t3('producer', { staffId: STAFF_B, confidence: 0.99 }),
+      ...strong(STAFF_A, 'executive_producer'),
+      t3('executive_producer', { staffId: STAFF_B, confidence: 0.99 }),
     ];
     const out = fuse(baseInput(rows));
-    expect(find(out, STAFF_A, 'producer')?.row.withheldReason).toBeNull();
-    expect(find(out, STAFF_B, 'producer')?.row.withheldReason).toBe('unconfirmed');
+    expect(find(out, STAFF_A, 'executive_producer')?.row.withheldReason).toBeNull();
+    expect(find(out, STAFF_B, 'executive_producer')?.row.withheldReason).toBe('unconfirmed');
   });
 
-  it('two different roles of the single-holder family are not a conflict between people', () => {
+  it('`producer` is not a single-holder role: co-producers are both served', () => {
+    const rows = [...strong(STAFF_A, 'producer'), ...strong(STAFF_B, 'producer')];
+    const out = fuse(baseInput(rows));
+    expect(out.claims.map((c) => c.row.withheldReason)).toEqual([null, null]);
+  });
+
+  it('an executive producer and a producer are different seats, not a conflict', () => {
     const rows = [...strong(STAFF_A, 'executive_producer'), ...strong(STAFF_B, 'producer')];
     const out = fuse(baseInput(rows));
     expect(out.claims.map((c) => c.row.withheldReason)).toEqual([null, null]);
@@ -277,22 +322,79 @@ describe('conflicts', () => {
     expect(fuse(baseInput(rows)).claims.map((c) => c.row.withheldReason)).toEqual([null, null]);
   });
 
-  it('one person in contradictory role families on a project: all those claims withheld', () => {
-    const rows = [...strong(STAFF_A, 'copywriter'), ...strong(STAFF_A, 'account_manager')];
+  it('one person in an incompatible role pair on a project: both claims withheld', () => {
+    const rows = [...strong(STAFF_A, 'account_director'), ...strong(STAFF_A, 'art_director')];
     const out = fuse(baseInput(rows));
     expect(out.claims).toHaveLength(2);
     expect(out.claims.every((c) => c.row.withheldReason === 'conflicting')).toBe(true);
   });
 
-  it('several roles inside one family are fine; `other` contradicts nothing', () => {
+  it('every listed pair conflicts, in either order of appearance', () => {
+    for (const [x, y] of INCOMPATIBLE_ROLE_PAIRS) {
+      for (const order of [
+        [x, y],
+        [y, x],
+      ] as const) {
+        resetIds();
+        const rows = [...strong(STAFF_A, order[0]), ...strong(STAFF_A, order[1])];
+        const out = fuse(baseInput(rows));
+        expect(out.claims.map((c) => c.row.withheldReason)).toEqual(['conflicting', 'conflicting']);
+      }
+    }
+  });
+
+  it('only the pair members are withheld: a third compatible role of the person stays served', () => {
     const rows = [
-      ...strong(STAFF_A, 'copywriter'),
+      ...strong(STAFF_A, 'account_director'),
       ...strong(STAFF_A, 'art_director'),
-      ...strong(STAFF_A, 'other'),
+      ...strong(STAFF_A, 'copywriter'),
     ];
     const out = fuse(baseInput(rows));
-    expect(out.claims).toHaveLength(3);
+    expect(find(out, STAFF_A, 'copywriter')?.row.withheldReason).toBeNull();
+    expect(find(out, STAFF_A, 'art_director')?.row.withheldReason).toBe('conflicting');
+  });
+
+  it('a pair needs BOTH claims servable: an unconfirmed second role does not withhold the first', () => {
+    const rows = [
+      ...strong(STAFF_A, 'account_director'),
+      // art_director on another project, one tier only: unconfirmed, and on a different project anyway
+      t3('art_director', { staffId: STAFF_A, pieceId: null, campaignId: CAMPAIGN_LOST }),
+    ];
+    const out = fuse(baseInput(rows));
+    expect(find(out, STAFF_A, 'account_director')?.row.withheldReason).toBeNull();
+  });
+
+  it('neighbouring crafts are legitimately combined: strategist + copywriter, art director + designer', () => {
+    for (const [x, y] of [
+      ['strategist', 'copywriter'],
+      ['art_director', 'designer'],
+      ['copywriter', 'art_director'],
+    ] as const) {
+      resetIds();
+      const out = fuse(baseInput([...strong(STAFF_A, x), ...strong(STAFF_A, y)]));
+      expect(out.claims.map((c) => c.row.withheldReason)).toEqual([null, null]);
+    }
+  });
+
+  it('`other` contradicts nothing', () => {
+    const rows = [...strong(STAFF_A, 'copywriter'), ...strong(STAFF_A, 'other')];
+    const out = fuse(baseInput(rows));
     expect(out.claims.every((c) => c.row.withheldReason === null)).toBe(true);
+  });
+
+  it('the incompatible pair list is short, typed, free of self-pairs and duplicates', () => {
+    expect(INCOMPATIBLE_ROLE_PAIRS.length).toBeGreaterThanOrEqual(3);
+    expect(INCOMPATIBLE_ROLE_PAIRS.length).toBeLessThanOrEqual(5);
+    const seen = new Set<string>();
+    for (const [x, y] of INCOMPATIBLE_ROLE_PAIRS) {
+      expect(x).not.toBe(y);
+      expect(ROLE_NORMS).toContain(x);
+      expect(ROLE_NORMS).toContain(y);
+      const key = [x, y].sort().join('|');
+      expect(seen.has(key)).toBe(false);
+      seen.add(key);
+    }
+    expect([...SINGLE_HOLDER_ROLES]).toEqual(['executive_producer']);
   });
 
   it('roles on different projects never contradict', () => {
