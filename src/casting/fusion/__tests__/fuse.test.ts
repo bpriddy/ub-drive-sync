@@ -323,7 +323,7 @@ describe('conflicts', () => {
   });
 
   it('one person in an incompatible role pair on a project: both claims withheld', () => {
-    const rows = [...strong(STAFF_A, 'account_director'), ...strong(STAFF_A, 'art_director')];
+    const rows = [...strong(STAFF_A, 'finance'), ...strong(STAFF_A, 'creative_director')];
     const out = fuse(baseInput(rows));
     expect(out.claims).toHaveLength(2);
     expect(out.claims.every((c) => c.row.withheldReason === 'conflicting')).toBe(true);
@@ -345,23 +345,34 @@ describe('conflicts', () => {
 
   it('only the pair members are withheld: a third compatible role of the person stays served', () => {
     const rows = [
-      ...strong(STAFF_A, 'account_director'),
-      ...strong(STAFF_A, 'art_director'),
+      ...strong(STAFF_A, 'finance'),
+      ...strong(STAFF_A, 'creative_director'),
       ...strong(STAFF_A, 'copywriter'),
     ];
     const out = fuse(baseInput(rows));
     expect(find(out, STAFF_A, 'copywriter')?.row.withheldReason).toBeNull();
-    expect(find(out, STAFF_A, 'art_director')?.row.withheldReason).toBe('conflicting');
+    expect(find(out, STAFF_A, 'creative_director')?.row.withheldReason).toBe('conflicting');
   });
 
   it('a pair needs BOTH claims servable: an unconfirmed second role does not withhold the first', () => {
     const rows = [
-      ...strong(STAFF_A, 'account_director'),
-      // art_director on another project, one tier only: unconfirmed, and on a different project anyway
-      t3('art_director', { staffId: STAFF_A, pieceId: null, campaignId: CAMPAIGN_LOST }),
+      ...strong(STAFF_A, 'finance'),
+      // creative_director on another project, one tier only: unconfirmed, and on a different project anyway
+      t3('creative_director', { staffId: STAFF_A, pieceId: null, campaignId: CAMPAIGN_LOST }),
     ];
     const out = fuse(baseInput(rows));
-    expect(find(out, STAFF_A, 'account_director')?.row.withheldReason).toBeNull();
+    expect(find(out, STAFF_A, 'finance')?.row.withheldReason).toBeNull();
+  });
+
+  it('pairs considered and deliberately left out do not conflict', () => {
+    for (const [x, y] of [
+      ['finance', 'account_director'],
+      ['account_director', 'art_director'],
+    ] as const) {
+      resetIds();
+      const out = fuse(baseInput([...strong(STAFF_A, x), ...strong(STAFF_A, y)]));
+      expect(out.claims.map((c) => c.row.withheldReason)).toEqual([null, null]);
+    }
   });
 
   it('neighbouring crafts are legitimately combined: strategist + copywriter, art director + designer', () => {
@@ -383,8 +394,13 @@ describe('conflicts', () => {
   });
 
   it('the incompatible pair list is short, typed, free of self-pairs and duplicates', () => {
-    expect(INCOMPATIBLE_ROLE_PAIRS.length).toBeGreaterThanOrEqual(3);
+    // Bound lowered from 3..5 to 2..5 on purpose: the Casting contact kept two pairs (2026-11-20).
+    expect(INCOMPATIBLE_ROLE_PAIRS.length).toBeGreaterThanOrEqual(2);
     expect(INCOMPATIBLE_ROLE_PAIRS.length).toBeLessThanOrEqual(5);
+    expect(INCOMPATIBLE_ROLE_PAIRS).toEqual([
+      ['finance', 'creative_director'],
+      ['executive_creative_director', 'account_executive'],
+    ]);
     const seen = new Set<string>();
     for (const [x, y] of INCOMPATIBLE_ROLE_PAIRS) {
       expect(x).not.toBe(y);
