@@ -341,8 +341,7 @@ Then re-trigger.
 
 ### "OOM — Container terminated on signal 9"
 
-Memory limit reached. Dev runs at 2Gi (`--memory` in `.github/workflows/deploy.yml`;
-the staging and prod references in `cloudbuild/` still say 1Gi). Check:
+Memory limit reached. Dev runs at 2Gi (`--memory` in `.github/workflows/deploy.yml`). Check:
 - Was the day-bucket extra heavy? (Many edited files with large PDFs.)
 - Is the `[mem]` watcher showing rss climbing? Identify which phase.
 - Which file was in memory? Each download of at least `DOWNLOAD_HEAVY_BYTES`

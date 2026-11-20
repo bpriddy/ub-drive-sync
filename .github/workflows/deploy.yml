@@ -5,16 +5,23 @@
 # Auth is Workload Identity Federation (OIDC) — no service-account keys.
 # Required GitHub repository variables: GCP_REGION, GCP_PROJECT_ID,
 # GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT_EMAIL.
-# Required secrets: GH_PACKAGES_TOKEN (read:packages), and for dev
-# DRIVE_ROOT_FOLDER_ID_DEV, GUB_ADMIN_BASE_URL_DEV, GUB_REVIEW_BASE_URL_DEV:
-# deployment identifiers stay out of this file and are masked in run logs.
-# The deploy fails before touching anything when one is unset.
+# Required secret: GH_PACKAGES_TOKEN (read:packages).
+#
+# Per-environment values (D37, #89) come from the GitHub Environment's
+# variables: DRIVE_ROOT_FOLDER_ID, GUB_ADMIN_BASE_URL, GUB_REVIEW_BASE_URL.
+# They are identifiers, not secrets. Until the owner copies them into the
+# Environment, each one falls back to today's repository secret
+# (DRIVE_ROOT_FOLDER_ID_DEV, GUB_ADMIN_BASE_URL_DEV, GUB_REVIEW_BASE_URL_DEV),
+# so a prod deploy keeps today's values. Drop the fallback once `prod` has all
+# three, and before any job here runs in another Environment (the repo
+# secrets hold prod's values). The deploy fails before touching anything when
+# a value is missing.
 #
 # THIS WORKFLOW IS THE SINGLE SOURCE OF TRUTH FOR RUNTIME CONFIG (the FLAGS
-# array below). cloudbuild/staging.yaml and prod.yaml are frozen provisioning
-# references; their Cloud Build triggers are disabled (CD cutover 2026-08-28)
-# and the dev one is retired with cloudbuild/dev.yaml.
-# Only dev is ported — staging/prod arms fail loudly until provisioned.
+# array below). The old Cloud Build configs are retired; the never-provisioned
+# staging/prod arms and cloudbuild/{staging,prod}.yaml are gone (D37). The job
+# keeps its live -dev name until the naming rule
+# (bpriddy/gcp-universal-backend#233).
 
 # D37 step 1 (bpriddy/gcp-universal-backend#221): there is no push trigger.
 # Every run deploys into os-test-491819, which is UB prod (its services keep
@@ -25,25 +32,19 @@ name: Deploy
 
 on:
   workflow_dispatch:
-    inputs:
-      environment:
-        description: Target environment (only dev is ported; see the FLAGS case)
-        type: choice
-        default: dev
-        options: [dev, staging, prod]
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: deploy-${{ github.event.inputs.environment || 'dev' }}
+  group: deploy-dev
   cancel-in-progress: false
 
 env:
-  ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
   AR_REPO: gub-drive-sync
-  JOB: gub-drive-sync-${{ github.event.inputs.environment || 'dev' }}
+  # UB prod's live name (its services keep their -dev names).
+  JOB: gub-drive-sync-dev
   REGION: ${{ vars.GCP_REGION }}
   PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
 
@@ -89,39 +90,31 @@ jobs:
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}
 
-      # Unported environments fail HERE, before anything is touched.
+      # Missing config fails HERE, before anything is touched.
       - name: Resolve environment config
         env:
-          DRIVE_ROOT_FOLDER_ID_DEV: ${{ secrets.DRIVE_ROOT_FOLDER_ID_DEV }}
-          GUB_ADMIN_BASE_URL_DEV: ${{ secrets.GUB_ADMIN_BASE_URL_DEV }}
-          GUB_REVIEW_BASE_URL_DEV: ${{ secrets.GUB_REVIEW_BASE_URL_DEV }}
+          DRIVE_ROOT_FOLDER_ID: ${{ vars.DRIVE_ROOT_FOLDER_ID || secrets.DRIVE_ROOT_FOLDER_ID_DEV }}
+          GUB_ADMIN_BASE_URL: ${{ vars.GUB_ADMIN_BASE_URL || secrets.GUB_ADMIN_BASE_URL_DEV }}
+          GUB_REVIEW_BASE_URL: ${{ vars.GUB_REVIEW_BASE_URL || secrets.GUB_REVIEW_BASE_URL_DEV }}
         run: |
-          case "$ENVIRONMENT" in
-            dev)
-              for name in DRIVE_ROOT_FOLDER_ID_DEV GUB_ADMIN_BASE_URL_DEV GUB_REVIEW_BASE_URL_DEV; do
-                if [ -z "${!name}" ]; then
-                  echo "::error::repository secret $name is not set; see the header of this workflow."
-                  exit 1
-                fi
-              done
-              {
-                echo "DRIVE_ROOT_FOLDER_ID=$DRIVE_ROOT_FOLDER_ID_DEV"
-                echo "GUB_ADMIN_BASE_URL=$GUB_ADMIN_BASE_URL_DEV"
-                echo "GUB_REVIEW_BASE_URL=$GUB_REVIEW_BASE_URL_DEV"
-              } >> "$GITHUB_ENV"
-              ;;
-            *)
-              echo "::error::environment '$ENVIRONMENT' is not ported to this workflow — cloudbuild/$ENVIRONMENT.yaml is the provisioning reference (note: prod differs — 1Gi memory, MAIL_DRIVER=mailgun)."
+          for name in PROJECT_ID REGION DRIVE_ROOT_FOLDER_ID GUB_ADMIN_BASE_URL GUB_REVIEW_BASE_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set: add it as a variable in GitHub Environment prod; see the header of this workflow."
               exit 1
-              ;;
-          esac
+            fi
+          done
+          {
+            echo "DRIVE_ROOT_FOLDER_ID=$DRIVE_ROOT_FOLDER_ID"
+            echo "GUB_ADMIN_BASE_URL=$GUB_ADMIN_BASE_URL"
+            echo "GUB_REVIEW_BASE_URL=$GUB_REVIEW_BASE_URL"
+          } >> "$GITHUB_ENV"
           echo "RUNTIME_SA=sa-$JOB@$PROJECT_ID.iam.gserviceaccount.com" >> "$GITHUB_ENV"
           echo "CLOUDSQL=$PROJECT_ID:$REGION:gub-platform" >> "$GITHUB_ENV"
 
       - name: Verify target job is provisioned
         run: |
           gcloud run jobs describe "$JOB" --region "$REGION" --format='value(metadata.name)' >/dev/null \
-            || { echo "::error::Cloud Run job $JOB does not exist in $PROJECT_ID/$REGION. Provision '$ENVIRONMENT' deliberately first."; exit 1; }
+            || { echo "::error::Cloud Run job $JOB does not exist in $PROJECT_ID/$REGION. Provision it deliberately first."; exit 1; }
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
@@ -136,31 +129,23 @@ jobs:
           docker push --all-tags "$IMAGE"
           echo "IMAGE_URI=$IMAGE:$SHORT_SHA" >> "$GITHUB_ENV"
 
-      # FLAGS = the dev runtime config (ported from the retired cloudbuild
-      # dev config; identifiers come from repository secrets). The container
+      # FLAGS = the runtime config (ported from the retired cloudbuild dev
+      # config; identifiers come from the Environment, see the header). The container
       # entrypoint is the runner — no --command/--args, deliberately.
       - name: Update Cloud Run job
         run: |
-          case "$ENVIRONMENT" in
-            dev)
-              FLAGS=(
-                --tasks=1
-                --parallelism=1
-                --max-retries=0
-                --task-timeout=86400s
-                --memory=2Gi
-                --cpu=1
-                "--service-account=$RUNTIME_SA"
-                "--set-cloudsql-instances=$CLOUDSQL"
-                "--set-env-vars=NODE_ENV=production,GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,DRIVE_SYNC_JOB_NAME=$JOB,DRIVE_ROOT_FOLDER_ID=$DRIVE_ROOT_FOLDER_ID,DRIVE_DELAY_BETWEEN_ACCOUNTS_MS=5000,DRIVE_DELAY_BETWEEN_CAMPAIGNS_MS=2000,DRIVE_MAX_FILE_SIZE_BYTES=314572800,DRIVE_PROPOSAL_TTL_DAYS=14,GEMINI_MAX_INPUT_CHARS=40000,MAIL_DRIVER=console,MAIL_FROM_NAME=GUB,MAILGUN_REGION=us,GUB_ADMIN_BASE_URL=$GUB_ADMIN_BASE_URL,GUB_REVIEW_BASE_URL=$GUB_REVIEW_BASE_URL,SNAPSHOT_WRITE_FAILURE_LIMIT=0,SKIP_UNCHANGED_CONTENT=on"
-                "--set-secrets=DATABASE_URL=gub-drive-sync-db-url-dev:latest,GUB_BOT_OAUTH_CLIENT_ID=gub-drive-sync-bot-oauth-client-id-dev:latest,GUB_BOT_OAUTH_CLIENT_SECRET=gub-drive-sync-bot-oauth-client-secret-dev:latest,MAILGUN_API_KEY=gub-drive-sync-mailgun-api-key-dev:latest"
-              )
-              ;;
-            *)
-              echo "::error::no FLAGS ported for '$ENVIRONMENT'"
-              exit 1
-              ;;
-          esac
+          FLAGS=(
+            --tasks=1
+            --parallelism=1
+            --max-retries=0
+            --task-timeout=86400s
+            --memory=2Gi
+            --cpu=1
+            "--service-account=$RUNTIME_SA"
+            "--set-cloudsql-instances=$CLOUDSQL"
+            "--set-env-vars=NODE_ENV=production,GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,DRIVE_SYNC_JOB_NAME=$JOB,DRIVE_ROOT_FOLDER_ID=$DRIVE_ROOT_FOLDER_ID,DRIVE_DELAY_BETWEEN_ACCOUNTS_MS=5000,DRIVE_DELAY_BETWEEN_CAMPAIGNS_MS=2000,DRIVE_MAX_FILE_SIZE_BYTES=314572800,DRIVE_PROPOSAL_TTL_DAYS=14,GEMINI_MAX_INPUT_CHARS=40000,MAIL_DRIVER=console,MAIL_FROM_NAME=GUB,MAILGUN_REGION=us,GUB_ADMIN_BASE_URL=$GUB_ADMIN_BASE_URL,GUB_REVIEW_BASE_URL=$GUB_REVIEW_BASE_URL,SNAPSHOT_WRITE_FAILURE_LIMIT=0,SKIP_UNCHANGED_CONTENT=on"
+            "--set-secrets=DATABASE_URL=gub-drive-sync-db-url-dev:latest,GUB_BOT_OAUTH_CLIENT_ID=gub-drive-sync-bot-oauth-client-id-dev:latest,GUB_BOT_OAUTH_CLIENT_SECRET=gub-drive-sync-bot-oauth-client-secret-dev:latest,MAILGUN_API_KEY=gub-drive-sync-mailgun-api-key-dev:latest"
+          )
           gcloud run jobs deploy "$JOB" --image "$IMAGE_URI" --region "$REGION" "${FLAGS[@]}"
 
       - name: Report job image
