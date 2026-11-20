@@ -18,12 +18,31 @@ node dist/src/casting/t3/pilot-main.js \
 It lists the account's Drive tree (read-only), runs the stage's shortlist step (window, tiers,
 version collapse, identical-content copies), draws the sample, prints the `PROPOSAL` block first and
 then the details (sample by class, excluded counts, measured text lengths, a reference estimate with
-the S5a overhead), and **exits 3** ("printed, nothing started"). It never creates a model client, a
+the calibrated presets, see "Cost estimate presets"), and **exits 3** ("printed, nothing started"). It never creates a model client, a
 sink or the ledger directory. `--read-text` reads only the sampled documents (read-only Drive calls,
 no model call) to size the estimate.
 
 Exit codes: 0 run finished, 1 error or failed run, 2 a guard or an argument refused, 3 dry-run,
 4 run stopped at the cost ceiling.
+
+## Cost estimate presets
+
+`estimate.ts` (`ASSUMPTION_PRESETS`) prices a run as
+`cells x ((overhead + min(chars, cap) / chars_per_token) x P_in + (out + thoughts) x P_out) x retry`.
+Calibrated: pilot P1 (2026-11-20; 118 model calls, gemini-3.5-flash, thinking LOW).
+
+| Parameter        | low   | base (measured)     | high  |
+| ---------------- | ----- | ------------------- | ----- |
+| overhead tokens  | 850   | 940                 | 1,100 |
+| chars per token  | 4.0   | 3.55                | 3.0   |
+| output tokens    | 250   | 336                 | 600   |
+| thought tokens   | 0     | 12                  | 200   |
+| retry factor     | 1.0   | 1.05 (measured 1.0) | 1.2   |
+| input cap, chars | 40000 | 40000               | 80000 |
+
+Caveats: the thought figure is measured at thinking LOW only; the proposal warns when the level
+is not LOW. Flash Lite token use is not measured: the Flash figures are applied to Flash Lite
+prices ([ASSUME]). Cached input is not discounted, so the input side is an upper bound.
 
 ## The sample
 
@@ -74,7 +93,7 @@ repeated.
 ## Tests
 
 `src/casting/t3/__tests__/`: `sample.test.ts` (determinism, stratification), `pilot.test.ts` (guards,
-dry-run touches nothing, apply and resume with a fake model), `listing-candidates.test.ts`, and
+dry-run touches nothing, apply and resume with a fake model), `truncate-estimate.test.ts` (estimate formula and the calibrated presets), `listing-candidates.test.ts`, and
 `no-real-client.test.ts` (static allow-list including the pilot entry point, import closure of the
 real wiring has no model client, dry-run with the client module poisoned). All use a mocked model and
 synthetic data.

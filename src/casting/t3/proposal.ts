@@ -38,6 +38,11 @@ export function formatProposal(input: {
       `estimated cost ${e.model}: low $${e.low.costUsd} / base $${e.base.costUsd} / high $${e.high.costUsd}${note}`,
     );
   }
+  if (input.thinkingLevel !== 'LOW') {
+    lines.push(
+      `note: thought tokens in the estimate are measured at thinking LOW (pilot P1); not valid for ${input.thinkingLevel}`,
+    );
+  }
   if (input.copies) {
     const c = input.copies;
     lines.push(

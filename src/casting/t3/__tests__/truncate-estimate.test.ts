@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fitToCap } from '../truncate';
-import { ASSUMPTION_PRESETS, estimate, estimateAll } from '../estimate';
+import { ASSUMPTION_PRESETS, PRESETS_CALIBRATION, estimate, estimateAll } from '../estimate';
 import { costUsd, priceOf } from '../pricing';
 import { UsageTally } from '../usage';
 import { buildPrompt, promptOverheadChars } from '../prompt';
@@ -111,30 +111,72 @@ describe('UsageTally', () => {
 describe('estimate', () => {
   const cells = [10_000, 20_000, 100_000];
 
+  it('pins the calibrated presets (pilot P1, 2026-11-20)', () => {
+    expect(PRESETS_CALIBRATION).toBe('pilot P1 (2026-11-20)');
+    expect(ASSUMPTION_PRESETS.base).toEqual({
+      charsPerToken: 3.55,
+      overheadTokens: 940,
+      tokensOut: 336,
+      tokensThoughts: 12,
+      retryFactor: 1.05,
+      capChars: 40_000,
+    });
+    expect(ASSUMPTION_PRESETS.low).toMatchObject({ overheadTokens: 850, tokensThoughts: 0 });
+    expect(ASSUMPTION_PRESETS.high).toMatchObject({ overheadTokens: 1100, capChars: 80_000 });
+  });
+
   it('follows the master-spec formula with the base preset', () => {
     const e = estimate('gemini-3.5-flash', { cellChars: cells }, ASSUMPTION_PRESETS.base);
     expect(e).not.toBeNull();
-    // chars capped at 40,000: 10k + 20k + 40k at 4 chars/token + 3 x 2,000 overhead
-    const tokensIn = 6000 + (10_000 + 20_000 + 40_000) / 4;
-    const tokensOut = 3 * 800;
-    const expected = ((tokensIn * 1.5 + tokensOut * 9) / 1e6) * 1.1;
+    // chars capped at 40,000: 10k + 20k + 40k at 3.55 chars/token + 3 x 940 overhead
+    const tokensIn = 3 * 940 + (10_000 + 20_000 + 40_000) / 3.55;
+    const tokensOut = 3 * (336 + 12);
+    const expected = ((tokensIn * 1.5 + tokensOut * 9) / 1e6) * 1.05;
     expect(e?.costUsd).toBeCloseTo(expected, 2);
+    expect(e?.tokensIn).toBe(Math.round(tokensIn * 1.05));
+    expect(e?.tokensOut).toBe(Math.round(tokensOut * 1.05));
     expect(e?.complete).toBe(true);
   });
 
-  it('reproduces the S1.2 whole-pool base total (13.8M in, 2.41M out, $42.4 Flash, $10.2 Lite)', () => {
-    // 2,739 readable documents at 10,320 characters (4,580 tokens in with 2,000 overhead), retry 1.1.
+  it('reproduces the formula on a synthetic input with the new base constants', () => {
+    // 1,000 documents of 10,000 characters: (940 + 10,000 / 3.55) in, 348 out, retry 1.05.
+    const input = { cellChars: Array<number>(1000).fill(10_000) };
+    const tokensIn = 1000 * (940 + 10_000 / 3.55);
+    const tokensOut = 1000 * 348;
+    const flash = estimate('gemini-3.5-flash', input, ASSUMPTION_PRESETS.base);
+    const lite = estimate('gemini-3.5-flash-lite', input, ASSUMPTION_PRESETS.base);
+    expect(flash?.tokensIn).toBe(Math.round(tokensIn * 1.05));
+    expect(flash?.tokensOut).toBe(Math.round(tokensOut * 1.05));
+    // 3,757 tokens in, 348 out per document: about $0.00877 x 1.05 = $0.0092 on Flash.
+    expect(flash?.costUsd).toBe(
+      Math.round(((tokensIn * 1.5 + tokensOut * 9) / 1e6) * 1.05 * 100) / 100,
+    );
+    expect(flash?.costUsd).toBeGreaterThan(9.1);
+    expect(flash?.costUsd).toBeLessThan(9.3);
+    expect(lite?.costUsd).toBe(
+      Math.round(((tokensIn * 0.3 + tokensOut * 2.5) / 1e6) * 1.05 * 100) / 100,
+    );
+  });
+
+  it('caps a long document at the base cap of 40,000 characters', () => {
+    const at = estimate('gemini-3.5-flash', { cellChars: [40_000] }, ASSUMPTION_PRESETS.base);
+    const over = estimate('gemini-3.5-flash', { cellChars: [400_000] }, ASSUMPTION_PRESETS.base);
+    expect(over?.tokensIn).toBe(at?.tokensIn);
+  });
+
+  it('prices a whole pool of equal documents from the calibrated base', () => {
+    // 2,739 documents at 10,320 characters: 3,847 tokens in with the 940 overhead, retry 1.05.
     const input = { cellChars: Array<number>(2739).fill(10_320) };
     const flash = estimate('gemini-3.5-flash', input, ASSUMPTION_PRESETS.base);
     const lite = estimate('gemini-3.5-flash-lite', input, ASSUMPTION_PRESETS.base);
-    expect(flash?.tokensIn).toBeGreaterThan(13_700_000);
-    expect(flash?.tokensIn).toBeLessThan(13_900_000);
-    expect(flash?.tokensOut).toBeGreaterThan(2_380_000);
-    expect(flash?.tokensOut).toBeLessThan(2_440_000);
-    expect(flash?.costUsd).toBeGreaterThan(42.1);
-    expect(flash?.costUsd).toBeLessThan(42.7);
-    expect(lite?.costUsd).toBeGreaterThan(10.0);
-    expect(lite?.costUsd).toBeLessThan(10.4);
+    expect(flash?.tokensIn).toBeGreaterThan(11_000_000);
+    expect(flash?.tokensIn).toBeLessThan(11_100_000);
+    expect(flash?.tokensOut).toBeGreaterThan(990_000);
+    expect(flash?.tokensOut).toBeLessThan(1_010_000);
+    expect(flash?.costUsd).toBeGreaterThan(25.4);
+    expect(flash?.costUsd).toBeLessThan(25.8);
+    expect(lite?.costUsd).toBeGreaterThan(5.7);
+    expect(lite?.costUsd).toBeLessThan(5.9);
   });
 
   it('is monotone low <= base <= high for every priced model', () => {
@@ -198,5 +240,17 @@ describe('prompt and proposal', () => {
     expect(text).toMatch(
       /estimated cost gemini-3.5-flash: low \$[\d.]+ \/ base \$[\d.]+ \/ high \$[\d.]+/,
     );
+    expect(text).not.toContain('thought tokens');
+  });
+
+  it('warns that the thought figure is measured at LOW when the level is not LOW', () => {
+    const text = formatProposal({
+      cells: 40,
+      accounts: 'one',
+      thinkingLevel: 'MEDIUM',
+      parallel: 2,
+      estimates: estimateAll({ cellChars: [10_000] }),
+    });
+    expect(text).toContain('measured at thinking LOW (pilot P1); not valid for MEDIUM');
   });
 });
