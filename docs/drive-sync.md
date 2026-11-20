@@ -474,8 +474,6 @@ prisma/schema.prisma            Mirrored schema (drive_sync_runs +
                                 are the runtime config: --memory=2Gi
                                 --cpu=1. Heartbeat watcher in engine
                                 relies on this headroom.
-cloudbuild/                     staging.yaml / prod.yaml: provisioning
-                                references for unported environments.
 
 docs/
   drive-sync.md                 This file.
