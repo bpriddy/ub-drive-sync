@@ -44,6 +44,8 @@ export function ev(p: Partial<FusionEvidence> & Pick<FusionEvidence, 'source'>):
     fileId: `file-${counter}`,
     location: null,
     confidence: 0.3,
+    hasQuote: true,
+    hasRole: true,
     withheldReason: null,
     extractorVersion:
       p.source === 'drive_content' ? 't3-v1' : p.source === 'drive_activity' ? 't2-v1' : 't1-v1',
@@ -222,6 +224,8 @@ export function generateInput(seed: number, opts: GeneratorOptions = {}): Fusion
       fileId: `gen-file-${n}`,
       location: null,
       confidence: 0.3,
+      hasQuote: true,
+      hasRole: true,
       withheldReason: null,
       extractorVersion: 'v1',
       ...r,

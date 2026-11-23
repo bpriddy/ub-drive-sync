@@ -79,6 +79,8 @@ interface EvidenceDbRow {
   fileId: string;
   location: string | null;
   confidence: number;
+  hasQuote: boolean;
+  hasRole: boolean;
   withheldReason: string | null;
   extractorVersion: string;
 }
@@ -88,7 +90,7 @@ export class PgEvidenceReader implements EvidenceReader {
 
   /**
    * One account, keyset-paged by id. Selects only what the formula reads: no raw
-   * name, no quote, no raw role text.
+   * name, no quote, no raw role text (only whether a quote and a role are present).
    */
   async readPage(
     accountId: string,
@@ -111,6 +113,8 @@ export class PgEvidenceReader implements EvidenceReader {
              file_id            AS "fileId",
              location,
              confidence,
+             (quote IS NOT NULL)    AS "hasQuote",
+             (role_raw IS NOT NULL) AS "hasRole",
              withheld_reason    AS "withheldReason",
              extractor_version  AS "extractorVersion"
         FROM evidence
@@ -135,6 +139,8 @@ export class PgEvidenceReader implements EvidenceReader {
       fileId: r.fileId,
       location: r.location,
       confidence: Number(r.confidence),
+      hasQuote: r.hasQuote === true,
+      hasRole: r.hasRole === true,
       withheldReason: inSet<WithheldReason>(WITHHELD_REASONS, r.withheldReason, 'withheld_reason'),
       extractorVersion: r.extractorVersion,
     }));

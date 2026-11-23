@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { scoreClaim, type ScoreRow } from '../score';
+import { scoreClaim, t3RowStrength, type ScoreRow } from '../score';
 import {
   BREADTH_MAX_EXTRA,
   BREADTH_STEP,
+  T3_BASE,
+  T3_QUOTE_STEP,
+  T3_ROLE_STEP,
   LOST_PITCH_FACTOR,
   SERVE_MIN_CONFIDENCE,
   TIER_CEILING,
@@ -10,10 +13,13 @@ import {
 } from '../constants';
 import { mulberry32, shuffle } from './fixtures';
 
+// Content rows carry a grounded quote and a stated role unless a test says otherwise.
 const t = (tier: ScoreRow['tier'], confidence: number, fileId: string): ScoreRow => ({
   tier,
   confidence,
   fileId,
+  hasQuote: true,
+  hasRole: true,
 });
 
 describe('scoreClaim: the documented formula', () => {
@@ -26,10 +32,10 @@ describe('scoreClaim: the documented formula', () => {
   });
 
   it('agreement across tiers raises the score (noisy-or)', () => {
-    // 1 - (1 - 0.95) * (1 - 0.3) = 0.965
+    // T3 row: min(0.95, 0.6 + 0.1 + 0.1) = 0.8; 1 - (1 - 0.8) * (1 - 0.3) = 0.86
     const r = scoreClaim([t('T3', 0.95, 'a'), t('T1', 0.3, 'b')], 1);
-    expect(r.tierScores).toEqual({ T1: 0.3, T3: 0.95 });
-    expect(r.confidence).toBe(0.965);
+    expect(r.tierScores).toEqual({ T1: 0.3, T3: 0.8 });
+    expect(r.confidence).toBe(0.86);
     expect(r.capped).toBe(false);
   });
 
@@ -48,18 +54,18 @@ describe('scoreClaim: the documented formula', () => {
   });
 
   it('files beyond the first inside one tier add a small, capped bonus', () => {
-    const one = scoreClaim([t('T3', 0.8, 'a'), t('T1', 0.3, 'x')], 1);
+    const one = scoreClaim([t('T3', 0.7, 'a'), t('T1', 0.3, 'x')], 1);
     const three = scoreClaim(
-      [t('T3', 0.8, 'a'), t('T3', 0.8, 'b'), t('T3', 0.8, 'c'), t('T1', 0.3, 'x')],
+      [t('T3', 0.7, 'a'), t('T3', 0.7, 'b'), t('T3', 0.7, 'c'), t('T1', 0.3, 'x')],
       1,
     );
-    expect(three.tierScores.T3).toBeCloseTo(0.8 + 2 * BREADTH_STEP, 6);
+    expect(three.tierScores.T3).toBeCloseTo(0.7 + 2 * BREADTH_STEP, 6);
     expect(three.confidence).toBeGreaterThan(one.confidence);
     const many = scoreClaim(
-      [...Array(20).keys()].map((i) => t('T3', 0.8, `f${i}`)).concat(t('T1', 0.3, 'x')),
+      [...Array(20).keys()].map((i) => t('T3', 0.7, `f${i}`)).concat(t('T1', 0.3, 'x')),
       1,
     );
-    expect(many.tierScores.T3).toBeCloseTo(0.8 + BREADTH_MAX_EXTRA * BREADTH_STEP, 6);
+    expect(many.tierScores.T3).toBeCloseTo(0.7 + BREADTH_MAX_EXTRA * BREADTH_STEP, 6);
   });
 
   it('copies of one file are one witness', () => {
@@ -88,8 +94,38 @@ describe('scoreClaim: the documented formula', () => {
   it('a lost pitch scales every row by LOST_PITCH_FACTOR', () => {
     const normal = scoreClaim([t('T3', 0.9, 'a'), t('T1', 0.3, 'b')], 1);
     const lost = scoreClaim([t('T3', 0.9, 'a'), t('T1', 0.3, 'b')], LOST_PITCH_FACTOR);
-    expect(lost.tierScores.T3).toBeCloseTo(0.9 * LOST_PITCH_FACTOR, 3);
+    // The content row is first capped at 0.8 (quote and role), then scaled.
+    expect(lost.tierScores.T3).toBeCloseTo(0.8 * LOST_PITCH_FACTOR, 3);
     expect(lost.confidence).toBeLessThan(normal.confidence);
+  });
+
+  it('a content row is worth what the mention shows: base, plus a grounded quote, plus a stated role', () => {
+    const row = (q: boolean, role: boolean): ScoreRow => ({
+      tier: 'T3',
+      confidence: 0.95,
+      fileId: 'a',
+      hasQuote: q,
+      hasRole: role,
+    });
+    expect(scoreClaim([row(false, false)], 1).tierScores.T3).toBe(T3_BASE);
+    expect(scoreClaim([row(true, false)], 1).tierScores.T3).toBeCloseTo(T3_BASE + T3_QUOTE_STEP, 6);
+    expect(scoreClaim([row(false, true)], 1).tierScores.T3).toBeCloseTo(T3_BASE + T3_ROLE_STEP, 6);
+    expect(t3RowStrength(0.65, true, true)).toBe(0.65); // a weak name match still caps it
+  });
+
+  it('served claims spread out: quote, role, tiers and files each move the score', () => {
+    const bare = scoreClaim(
+      [
+        { tier: 'T3', confidence: 0.95, fileId: 'a', hasQuote: false, hasRole: true },
+        t('T1', 0.3, 'b'),
+      ],
+      1,
+    );
+    const quoted = scoreClaim([t('T3', 0.95, 'a'), t('T1', 0.3, 'b')], 1);
+    const threeTiers = scoreClaim([t('T3', 0.95, 'a'), t('T1', 0.3, 'b'), t('T2', 0.18, 'c')], 1);
+    expect(bare.confidence).toBeLessThan(quoted.confidence);
+    expect(quoted.confidence).toBeLessThan(threeTiers.confidence);
+    expect(threeTiers.confidence).toBeLessThan(1);
   });
 
   it('zero-confidence rows are not evidence of a tier', () => {

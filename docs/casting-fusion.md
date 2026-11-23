@@ -31,20 +31,28 @@ gives identical rows, hashes, ids and metrics (property tests in
   version, insert the new rows, insert the links. Layer 2 is a rebuildable
   projection; only Layer 1 is append-only.
 
-## Confidence formula (`fusion-v1`)
+## Confidence formula (`fusion-v2`)
 
 ```
 row strength   s_i = clamp01(confidence_i) * pitchFactor       (lost pitch: 0.7, else 1)
+               T3:  confidence_i first capped at 0.6 + 0.1 [grounded quote] + 0.1 [stated role]
 tier score     S_t = min(TIER_CEILING[t], max(s_i in t) + 0.05 * min(distinctFiles_t - 1, 3))
 combined       c   = 1 - product over present tiers (1 - S_t)
 cap            c   = min(c, 0.6)   unless >= 2 tiers AND a T3 (content) row
 confidence     round(c, 3)
 ```
 
-Tier ceilings: T1 0.5, T2 0.4, T3 0.99. Tiers: T1 `drive_metadata`, T2
+Tier ceilings: T1 0.5, T2 0.4, T3 0.85. Tiers: T1 `drive_metadata`, T2
 `drive_activity`, T3 `drive_content`. Gate to be served: confidence >= 0.7,
 at least 2 tiers, a T3 row, a project reference, no conflict (accepted
 2026-11-19: 0.7 and 2 tiers; the T3 and project requirements are part of this version).
+
+`fusion-v2` (2026-11-23) changed the T3 row strength and ceiling. In `fusion-v1` a content row
+was worth its name-match strength (0.95 for an exact name) up to 0.99, so on the first full
+account every served claim scored 0.96 to 1.00 and confidence could not rank them. Now a
+content row is worth what the mention shows: on the same data, served claims spread from 0.73
+to 0.94 and none dropped below 0.7. A side effect: a lost pitch needs broader evidence (two
+tiers on a lost pitch fall below 0.7).
 
 All constants are named in `constants.ts`. NONE IS CALIBRATED: they fix orderings
 and ceilings, and there is no ground truth. Changing a constant or the formula

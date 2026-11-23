@@ -297,6 +297,8 @@ export function fuse(input: FusionInput): FusionOutput {
         tier: TIER_OF_SOURCE[r.source],
         confidence: r.confidence,
         fileId: r.fileId,
+        hasQuote: r.hasQuote,
+        hasRole: r.hasRole,
       }));
       const score = scoreClaim(scoreRows, pitchFactor);
       const period = deriveClaimPeriod({
