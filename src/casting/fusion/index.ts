@@ -19,6 +19,7 @@ export { parseFusionArgs } from './args';
 export type { FusionArgs } from './args';
 export { scoreClaim, round3 } from './score';
 export { compareExtractorVersion, supersedeByVersion } from './supersede';
+export { compareLoad, keepNewestLoadPerFile } from './newest-load';
 export { FUSION_VERSION, FUSION_SYNC_SOURCE } from './constants';
 export type {
   ActivityHorizon,

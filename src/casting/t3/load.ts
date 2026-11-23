@@ -15,6 +15,9 @@
  *      row builder (`mentionsToDrafts`, `row.ts`) and the same identical-content copy
  *      expansion (`copies.ts`, driven by the `copy` lines the stage recorded in the ledger).
  *      Rows are stamped with the ledger record's own extractor version (never the code's).
+ *      A ledger that holds several ok cells of ONE file (the file was edited between two cells of
+ *      the same directory) loads only the newest cell of that file (`at`, then cell key): one
+ *      load is one content version, which is what fusion counts (docs/casting-fusion.md).
  *   3. dry-run (default): print counts only (no names, no quotes), write nothing, exit 3.
  *   4. apply: every row is built and checked first; only then the sink is opened (a sync run
  *      row, then insert-or-ignore batches on UNIQUE(extractor_version, claim_hash)), so a
@@ -172,12 +175,40 @@ export function readLedgerDir(
   return { header, runDate, records, unreadableLines: nonEmpty - records.length };
 }
 
+/**
+ * One content version per file in one load: of several ok cells of the same file, only the
+ * newest (`at`, ties by cell key) stays. Other statuses are untouched. Rows of the older cell
+ * would otherwise land in the same sync run as the newest one's and be counted next to them.
+ */
+export function newestOkCellPerFile(records: readonly CellRecord[]): {
+  records: CellRecord[];
+  olderCellsSkipped: number;
+} {
+  const newest = new Map<string, CellRecord>();
+  for (const r of records) {
+    if (r.status !== 'ok') continue;
+    const cur = newest.get(r.candidate.fileId);
+    if (cur === undefined || r.at > cur.at || (r.at === cur.at && r.cellKey > cur.cellKey)) {
+      newest.set(r.candidate.fileId, r);
+    }
+  }
+  const kept = records.filter(
+    (r) => r.status !== 'ok' || newest.get(r.candidate.fileId)?.cellKey === r.cellKey,
+  );
+  const skipped = new Set(
+    records.filter((r) => r.status === 'ok' && !kept.includes(r)).map((r) => r.cellKey),
+  ).size;
+  return { records: kept, olderCellsSkipped: skipped };
+}
+
 export interface LoadReport {
   readonly extractorVersion: string;
   readonly runDay: string;
   readonly cellsByStatus: Readonly<Record<string, number>>;
   readonly unreadableLines: number;
   readonly okCells: number;
+  /** Ok cells left out because the same file has a newer ok cell in this ledger. */
+  readonly olderCellsSkipped: number;
   readonly resolve: ResolveCounts;
   /** Rows built before the cross-cell duplicate collapse. */
   readonly rowsBuilt: number;
@@ -231,8 +262,9 @@ export async function runLoad(args: LoadArgs, io: LoadIo): Promise<LoadOutcome> 
     agencyDomains: args.agencyDomains,
   });
   const counts = newResolveCounts();
+  const { records: current, olderCellsSkipped } = newestOkCellPerFile(records);
   const drafts = resolveLedgerRecords(
-    records,
+    current,
     // The ledger's own `copy` lines carry the kept -> copies mapping: no selection edges here.
     { roster, now, selectionEdges: [], selectedKeys: null },
     counts,
@@ -263,6 +295,7 @@ export async function runLoad(args: LoadArgs, io: LoadIo): Promise<LoadOutcome> 
     cellsByStatus,
     unreadableLines,
     okCells,
+    olderCellsSkipped,
     resolve: counts,
     rowsBuilt: drafts.length,
     duplicatesAcrossCells,
@@ -275,7 +308,7 @@ export async function runLoad(args: LoadArgs, io: LoadIo): Promise<LoadOutcome> 
   print(`LEDGER LOAD (${apply ? 'apply' : 'dry-run'})`);
   print(`account: ${accountId}   extractor version: ${header.extractorVersion}`);
   print(
-    `ledger cells: ${sortedLine(cellsByStatus)}   unreadable lines: ${unreadableLines}   ok cells: ${okCells}`,
+    `ledger cells: ${sortedLine(cellsByStatus)}   unreadable lines: ${unreadableLines}   ok cells: ${okCells}   older cells of a re-read file skipped: ${olderCellsSkipped}`,
   );
   print(`run date (period clamp, from the ledger header): ${base.runDay}`);
   print(

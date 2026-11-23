@@ -79,15 +79,26 @@ const norm = (s: string | null): string =>
 
 /**
  * Hash over the claim's identity (source, file, location, raw name, raw role,
- * period): the idempotency key together with extractor_version.
+ * period, and the content version of the file when given): the idempotency key
+ * together with extractor_version.
+ *
+ * `contentVersion` is the ledger cell key of the cell the claim was read from (file +
+ * Drive md5, or the modified time of a Google-native file, + the cell configuration).
+ * It changes exactly when the content that was read changes, so a changed file hashes
+ * EVERY claim anew and one load writes the full set of its newest version, while a load
+ * of the same ledger again hashes the same and inserts nothing twice. Fusion keeps only
+ * the newest load of a file (docs/casting-fusion.md). Without it (null / undefined) the
+ * canonical form is the one rows had before the token existed, so those rows keep
+ * their hash; nothing but the T3 resolve step passes it.
  */
 export function claimHash(
   r: Pick<
     EvidenceRowShape,
     'source' | 'file_id' | 'location' | 'raw_name' | 'role_raw' | 'period_start' | 'period_end'
   >,
+  contentVersion?: string | null,
 ): string {
-  const canonical = JSON.stringify([
+  const parts: string[] = [
     r.source,
     r.file_id,
     norm(r.location),
@@ -95,8 +106,9 @@ export function claimHash(
     norm(r.role_raw),
     r.period_start ?? '',
     r.period_end ?? '',
-  ]);
-  return crypto.createHash('sha256').update(canonical).digest('hex');
+  ];
+  if (contentVersion !== undefined && contentVersion !== null) parts.push(contentVersion);
+  return crypto.createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }
 
 /** The table's row-level CHECKs and closed sets. Throws on the first violation. */

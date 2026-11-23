@@ -8,7 +8,8 @@
  *
  * Steps:
  *   1. drop duplicate ids, sort by id (so nothing below depends on input order);
- *   2. supersede older extractor versions per (source, file);
+ *   2. supersede older extractor versions per (source, file), then keep only the newest
+ *      load of each T3 file (an older content version is not counted);
  *   3. map every row to a canonical project (project.ts);
  *   4. keep only resolved, non-withheld STAFF rows of CURRENT staff. External,
  *      quarantined and former-staff rows stay in Layer 1 and never reach Layer 2;
@@ -38,6 +39,7 @@ import {
 } from './constants';
 import { assertExperienceInvariants } from './invariants';
 import { addDays, deriveClaimPeriod, envelope, campaignPeriod, periodsOverlap } from './period';
+import { keepNewestLoadPerFile } from './newest-load';
 import { createProjectResolver, type ProjectRef } from './project';
 import { scoreClaim, type ScoreRow } from './score';
 import { supersedeByVersion } from './supersede';
@@ -159,6 +161,7 @@ export function fuse(input: FusionInput): FusionOutput {
     evidenceRows: input.evidence.length,
     duplicateIds: 0,
     superseded: 0,
+    olderContentVersion: 0,
     staffRowsDropped: { notCurrent: 0, unknownStaff: 0, withheldStaffRow: 0 },
     byTier: { T1: newTierMetrics(), T2: newTierMetrics(), T3: newTierMetrics() },
     claims: {
@@ -189,8 +192,11 @@ export function fuse(input: FusionInput): FusionOutput {
   const sorted = [...unique.values()].sort((a, b) => byText(a.id, b.id));
 
   // 2. supersede by extractor_version.
-  const { kept: rows, superseded } = supersedeByVersion(sorted);
+  const { kept: current, superseded } = supersedeByVersion(sorted);
   metrics.superseded = superseded;
+  // 2b. a T3 file read again after an edit: only the newest load counts.
+  const { kept: rows, droppedOlderLoad } = keepNewestLoadPerFile(current);
+  metrics.olderContentVersion = droppedOlderLoad;
 
   const staffById = new Map<string, FusionStaff>(input.staff.map((s) => [s.staffId, s]));
   const resolve = createProjectResolver(input.campaigns, input.pieces);

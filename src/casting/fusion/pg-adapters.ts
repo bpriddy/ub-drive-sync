@@ -83,6 +83,8 @@ interface EvidenceDbRow {
   hasRole: boolean;
   withheldReason: string | null;
   extractorVersion: string;
+  syncRunId: string;
+  loadedAt: string;
 }
 
 export class PgEvidenceReader implements EvidenceReader {
@@ -91,6 +93,8 @@ export class PgEvidenceReader implements EvidenceReader {
   /**
    * One account, keyset-paged by id. Selects only what the formula reads: no raw
    * name, no quote, no raw role text (only whether a quote and a role are present).
+   * Each row also carries its load run and the run's start (`sync_runs`, a RESTRICT
+   * foreign key, so the join drops nothing): `keepNewestLoadPerFile` orders loads by it.
    */
   async readPage(
     accountId: string,
@@ -98,29 +102,32 @@ export class PgEvidenceReader implements EvidenceReader {
     limit: number,
   ): Promise<FusionEvidence[]> {
     const rows = await this.db.$queryRaw<EvidenceDbRow[]>(Prisma.sql`
-      SELECT id,
-             staff_id           AS "staffId",
-             person_kind        AS "personKind",
-             account_id         AS "accountId",
-             job_number         AS "jobNumber",
-             campaign_id        AS "campaignId",
-             piece_id           AS "pieceId",
-             role_norm          AS "roleNorm",
-             seniority,
-             to_char(period_start, 'YYYY-MM-DD') AS "periodStart",
-             to_char(period_end, 'YYYY-MM-DD')   AS "periodEnd",
-             source,
-             file_id            AS "fileId",
-             location,
-             confidence,
-             (quote IS NOT NULL)    AS "hasQuote",
-             (role_raw IS NOT NULL) AS "hasRole",
-             withheld_reason    AS "withheldReason",
-             extractor_version  AS "extractorVersion"
-        FROM evidence
-       WHERE account_id = ${accountId}::uuid
-         AND id > ${afterId ?? NIL_UUID}::uuid
-       ORDER BY id
+      SELECT e.id,
+             e.staff_id           AS "staffId",
+             e.person_kind        AS "personKind",
+             e.account_id         AS "accountId",
+             e.job_number         AS "jobNumber",
+             e.campaign_id        AS "campaignId",
+             e.piece_id           AS "pieceId",
+             e.role_norm          AS "roleNorm",
+             e.seniority,
+             to_char(e.period_start, 'YYYY-MM-DD') AS "periodStart",
+             to_char(e.period_end, 'YYYY-MM-DD')   AS "periodEnd",
+             e.source,
+             e.file_id            AS "fileId",
+             e.location,
+             e.confidence,
+             (e.quote IS NOT NULL)    AS "hasQuote",
+             (e.role_raw IS NOT NULL) AS "hasRole",
+             e.withheld_reason    AS "withheldReason",
+             e.extractor_version  AS "extractorVersion",
+             e.sync_run_id::text  AS "syncRunId",
+             to_char(s.started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "loadedAt"
+        FROM evidence e
+        JOIN sync_runs s ON s.id = e.sync_run_id
+       WHERE e.account_id = ${accountId}::uuid
+         AND e.id > ${afterId ?? NIL_UUID}::uuid
+       ORDER BY e.id
        LIMIT ${limit}
     `);
     return rows.map((r): FusionEvidence => ({
@@ -143,6 +150,8 @@ export class PgEvidenceReader implements EvidenceReader {
       hasRole: r.hasRole === true,
       withheldReason: inSet<WithheldReason>(WITHHELD_REASONS, r.withheldReason, 'withheld_reason'),
       extractorVersion: r.extractorVersion,
+      syncRunId: r.syncRunId,
+      loadedAt: r.loadedAt,
     }));
   }
 }

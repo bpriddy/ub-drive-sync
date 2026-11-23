@@ -17,7 +17,9 @@
  *    gate can only be lenient with it, never reject on it wrongly), else none.
  *  - confidence: the name-match strength for a staff row (placeholder until S6
  *    calibrates), 0 for a row that is withheld.
- *  - repeated claims in one document collapse by claim_hash.
+ *  - repeated claims in one document collapse by claim_hash;
+ *  - claim_hash includes the ledger cell key (content version), so a changed file is a full set
+ *    of new rows and fusion can keep the newest load of each file (docs/casting-fusion.md).
  */
 import {
   normalizeRole,
@@ -71,6 +73,12 @@ export interface ResolveDocInput {
   readonly index: RosterIndex;
   readonly context?: ResolutionContext | undefined;
   readonly extractorVersion: string;
+  /**
+   * Content version of what the mentions were read from: the ledger cell key (changes when
+   * the file's md5 / modified time or the cell configuration changes). Part of every claim's
+   * hash, so a changed file is written as a full new set of rows (see `claimHash`).
+   */
+  readonly contentVersion: string;
   readonly now: Date;
 }
 
@@ -124,8 +132,12 @@ export function mentionsToDrafts(input: ResolveDocInput, counts: ResolveCounts):
       extractor_version: input.extractorVersion,
     };
     // Hashed on the stated period, not the clamped one: a clamped end moves with the run
-    // day and would give the same claim a new hash on every later run.
-    const hash = claimHash({ ...base, period_start: stated.start, period_end: stated.end });
+    // day and would give the same claim a new hash on every later run. The content version
+    // makes a changed file's claims new rows even when a claim reads the same as before.
+    const hash = claimHash(
+      { ...base, period_start: stated.start, period_end: stated.end },
+      input.contentVersion,
+    );
     if (seen.has(hash)) {
       counts.duplicateClaims++;
       continue;
@@ -209,6 +221,8 @@ export function resolveLedgerRecords(
       mentions: rec.mentions,
       index: input.roster,
       extractorVersion: rec.extractorVersion,
+      // A copy shares the kept cell's content, so it carries the kept cell's key.
+      contentVersion: rec.cellKey,
       now: input.now,
     };
     drafts.push(

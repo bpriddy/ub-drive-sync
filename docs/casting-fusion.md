@@ -25,13 +25,14 @@ gives identical rows, hashes, ids and metrics (property tests in
 - A claim is SERVED when `withheld_reason` is NULL. Everything else is stored with
   a reason (`conflicting`, `unconfirmed`) and never served. There is no review queue.
 - Newer `extractor_version` supersedes older, per (source, file).
+- A T3 file read again after an edit counts with its newest load only (below).
 - Presence-only claims (no content row) are counted, not stored (`STORE_PRESENCE_ONLY_CLAIMS`).
 - `--apply` rebuilds one account in ONE transaction: delete the account's rows of
   every OTHER `fusion_version` (their links cascade), delete its rows of this
   version, insert the new rows, insert the links. Layer 2 is a rebuildable
   projection; only Layer 1 is append-only.
 
-## Confidence formula (`fusion-v2`)
+## Confidence formula (`fusion-v3`, formula unchanged since `fusion-v2`)
 
 ```
 row strength   s_i = clamp01(confidence_i) * pitchFactor       (lost pitch: 0.7, else 1)
@@ -54,10 +55,70 @@ content row is worth what the mention shows: on the same data, served claims spr
 to 0.94 and none dropped below 0.7. A side effect: a lost pitch needs broader evidence (two
 tiers on a lost pitch fall below 0.7).
 
+`fusion-v3` (2026-11-23) did not touch the formula: it changed which rows reach it (next section).
+
 All constants are named in `constants.ts`. NONE IS CALIBRATED: they fix orderings
 and ceilings, and there is no ground truth. Changing a constant or the formula
 bumps `FUSION_VERSION`; Layer 2 is keyed by `(fusion_version, experience_hash)`, so
 the serving layer must read one version only.
+
+## Newest content version of a file (`fusion-v3`)
+
+`evidence` is append-only, so when incremental T3 re-reads an edited file the rows of the old
+content stay next to the new ones. Counting both keeps a person who was removed from the file
+backed, and counts a person who is in both versions twice (more documents, more confidence).
+
+Rule (`newest-load.ts`, applied in `fuse()` right after the extractor supersede): for every T3
+(`drive_content`) file, only the rows written by the file's NEWEST LOAD are counted. Older rows
+stay in Layer 1 (nothing is deleted) and are reported as `metrics.olderContentVersion`. T1 and
+T2 rows are never filtered by this rule. The extractor supersede runs first, so the rule is
+"newest load of the newest extractor version of the file".
+
+What "newest" is read from: a row carries no content hash or modified time, only the load run
+that wrote it (`sync_run_id`) and the run's start (`sync_runs.started_at`; the reader joins it,
+a RESTRICT foreign key). Loads are ordered by start time, ties by run id, so the order is total
+and independent of row order. `evidence.created_at` was not used: it is stamped per batch, not
+per run, so one run would have several values.
+
+PRECONDITION (met by the T3 loader): a load of a changed file must write EVERY claim of the
+new version as rows of that load. The T3 sink is insert-or-ignore on
+`(extractor_version, claim_hash)`, so the loader puts the content version into `claim_hash`
+(`t3/row.ts` `claimHash(row, contentVersion)`, `t3/resolve-mentions.ts`). The token is the
+ledger CELL KEY (file id + Drive md5, or the modified time of a Google-native file, + prompt,
+model, thinking, cap), the narrowest value the ledger record carries that changes when the
+content that was read changes (the record keeps the md5 but not the modified time, so the cell
+key is the only token that also covers Google-native files). A cap or other configuration
+change gives a new cell key as well: that is a new extraction of the file, so it is a new load,
+which is the right outcome. Consequences:
+
+- loading the SAME ledger again hashes the same and inserts nothing (idempotent as before);
+- an edited file hashes every claim anew: a person in both versions is a fresh row of the new
+  load (counted once), a person only in the old version has no row in it (not counted);
+- copies (identical-content files) carry the kept cell's key; their own file id keeps them
+  apart from the kept file;
+- T1 and T2 hashes are untouched; so are T3 rows written before the token (no token = the
+  previous hash).
+- a ledger that holds several ok cells of one file loads only the newest (`at`, then cell key):
+  one load = one content version (`olderCellsSkipped` in the load report).
+
+Existing rows (hashed the old way, e.g. the first full-account load). They carry no token and
+stay as they are: for fusion they are that file's load of their own run, like any other. No
+one-time step is needed:
+
+- until the file changes, they are its only load and count as before (no drop, no double count);
+- loading the same ledger again with the new code inserts a second, equal set under new hashes
+  (the old hashes do not match). Fusion counts only the newer load of the file, so nothing is
+  counted twice; the cost is duplicate rows in Layer 1 (storage only). Not needed, so do not;
+- a later incremental load of an edited file supersedes them like any older load.
+
+Remaining limits, by design of "newest = latest load":
+
+- an edit that leaves the file with no mention at all writes no row, so the old rows stay
+  (the cell is ok with zero mentions; a content column on `evidence` would be needed);
+- a file edited back to content a ledger already holds is "done" for the incremental selection
+  and is not loaded again, so the newer load (the intermediate content) stays the newest;
+- load ledgers in date order: loading an OLDER ledger for the first time after a newer one makes
+  its rows the newest load of those files (it is a new run).
 
 ## Rules
 
@@ -124,6 +185,10 @@ switched. Order:
    account finishes.
 4. Between steps 2 and 3 the answer is empty for the rebuilt accounts. If that is
    not acceptable, turn the serving kill switch off for the window.
+
+`fusion-v3` changes served results (it can drop claims that rested on an old content
+version), so the same order applies: do not switch the pin until the rebuild has finished for
+EVERY account. In particular, switch `CASTING_FUSION_VERSION` in UB only after that.
 
 Rolling back is the same order in reverse: deploy the old code, re-apply, switch the pin.
 

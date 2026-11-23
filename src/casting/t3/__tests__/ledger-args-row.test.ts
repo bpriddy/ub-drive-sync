@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -197,6 +198,25 @@ describe('Layer 1 row invariants (mirror of the table CHECKs)', () => {
     expect(claimHash({ ...row, location: 'slide 2' })).not.toBe(k);
     expect(claimHash({ ...row, role_raw: 'Director' })).not.toBe(k);
     expect(claimHash({ ...row, period_start: '2024-01-01' })).not.toBe(k);
+  });
+
+  it('claim hash: no content version keeps the legacy hash, a content version changes it', () => {
+    const k = claimHash(row);
+    // Rows written before the token existed keep their identity (their hash is this exact value).
+    expect(claimHash(row, null)).toBe(k);
+    expect(claimHash(row, undefined)).toBe(k);
+    expect(claimHash(row, 'cell-1')).not.toBe(k);
+    expect(claimHash(row, 'cell-1')).toBe(claimHash(row, 'cell-1'));
+    expect(claimHash(row, 'cell-1')).not.toBe(claimHash(row, 'cell-2'));
+  });
+
+  it('the legacy canonical form is pinned (an accidental change would re-insert every old row)', () => {
+    expect(claimHash(row)).toBe(
+      crypto
+        .createHash('sha256')
+        .update(JSON.stringify(['drive_content', 'f', '', 'jane roe', 'producer', '', '']))
+        .digest('hex'),
+    );
   });
 });
 

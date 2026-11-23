@@ -239,16 +239,34 @@ describe('dry-run (the default)', () => {
     expect(report.duplicatesAcrossCells).toBe(0);
   });
 
-  it('counts a claim that sits in two ok cells once (duplicates by claim_hash)', async () => {
+  it('two ok cells of one file in a ledger: only the newest cell is loaded (one content version per load)', async () => {
     const run = await makeLedger('d3');
     const file = path.join(run.dir, 'cells.jsonl');
     const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
-    const okLine = JSON.parse(lines.find((l) => JSON.parse(l).status === 'ok') as string);
-    // The same file under another cell key (e.g. an edited version): same claims, new cell.
-    fs.appendFileSync(file, JSON.stringify({ ...okLine, cellKey: 'another-cell-key' }) + '\n');
+    const baseline = await runLoad(loadArgs(run.dir), loadIo(new RecordingSink()));
+    const okLine = JSON.parse(
+      lines.find((l) => {
+        const rec = JSON.parse(l);
+        return rec.status === 'ok' && rec.candidate.fileId === 'file-1';
+      }) as string,
+    );
+    // The same file under another cell key (an edited version), recorded later.
+    fs.appendFileSync(
+      file,
+      JSON.stringify({ ...okLine, cellKey: 'another-cell-key', at: '2099-01-01T00:00:00Z' }) + '\n',
+    );
     const out = await runLoad(loadArgs(run.dir), loadIo(new RecordingSink()));
-    expect(out.report.duplicatesAcrossCells).toBeGreaterThan(0);
-    expect(out.report.rows).toHaveLength(out.report.rowsBuilt - out.report.duplicatesAcrossCells);
+    expect(out.report.olderCellsSkipped).toBe(1);
+    // Same number of rows as before (the file counts once), none of the older cell's.
+    expect(out.report.rows).toHaveLength(baseline.report.rows.length);
+    expect(out.report.duplicatesAcrossCells).toBe(0);
+    expect(baseline.report.olderCellsSkipped).toBe(0);
+  });
+
+  it('a claim that sits in two ok cells of DIFFERENT files is two rows (file id is in the hash)', async () => {
+    const run = await makeLedger('d4');
+    const out = await runLoad(loadArgs(run.dir), loadIo(new RecordingSink()));
+    expect(out.report.rows.length).toBe(out.report.rowsBuilt);
   });
 });
 
