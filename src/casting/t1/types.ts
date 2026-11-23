@@ -2,23 +2,23 @@
  * Shared types of the T1 stage (Drive folder / job skeleton and file-metadata
  * presence evidence for the casting staffing dataset).
  *
- * The evidence row mirrors the Layer 1 contract in gub-schemas
- * `src/casting.ts` and `prisma/schema.prisma` (model Evidence), source commit
- * f8cf59f on the unpublished gub-schemas epic branch (version 1.26.0). The
- * package is not a dependency of this repo at that version yet, so the shapes
- * are declared here. After the pin moves to a release that carries them, the
- * closed sets and the row type can be imported from the package instead.
+ * The evidence row mirrors the Layer 1 contract in gub-schemas `src/casting.ts`
+ * and `prisma/schema.prisma` (model Evidence). The closed sets and the quote
+ * limit are re-exported from '@anomaly-technology/gub-schemas' (since 1.26.0);
+ * the insert-row shape below is repo-local (camelCase, writer-owned columns).
  */
+import {
+  EVIDENCE_QUOTE_MAX_CHARS,
+  EVIDENCE_SOURCES,
+  PERSON_KINDS,
+  WITHHELD_REASONS,
+  type EvidenceSource,
+  type PersonKind,
+  type WithheldReason,
+} from '@anomaly-technology/gub-schemas';
 
-/** Closed sets copied from gub-schemas casting.ts (DB CHECK constraints). */
-export const EVIDENCE_SOURCES = ['drive_metadata', 'drive_activity', 'drive_content'] as const;
-export const PERSON_KINDS = ['staff', 'external_unresolved', 'quarantined'] as const;
-export const WITHHELD_REASONS = ['ambiguous', 'conflicting', 'unconfirmed', 'unresolved'] as const;
-export const EVIDENCE_QUOTE_MAX_CHARS = 300;
-
-export type EvidenceSource = (typeof EVIDENCE_SOURCES)[number];
-export type PersonKind = (typeof PERSON_KINDS)[number];
-export type WithheldReason = (typeof WITHHELD_REASONS)[number];
+export { EVIDENCE_QUOTE_MAX_CHARS, EVIDENCE_SOURCES, PERSON_KINDS, WITHHELD_REASONS };
+export type { EvidenceSource, PersonKind, WithheldReason };
 
 /** Written into `extractor_version`. A change of derivation rules bumps it (new rows, old rows purgeable). */
 export const T1_EXTRACTOR_VERSION = 't1-metadata-v2';

@@ -1,19 +1,17 @@
 /**
  * Layer 1 `evidence` row, as this stage writes it.
  *
- * MIRROR of gub-schemas `src/casting.ts` (unpublished 1.26.0; row shapes read
- * at source commit d8e7042 of the local gub-schemas epic). Declared here only
- * because that version is not pinned in package.json yet. After the pin:
- * delete `EvidenceRowShape`, `EVIDENCE_QUOTE_MAX_CHARS` and `assertEvidenceInvariants`
- * and use `EvidenceRow`, `EVIDENCE_QUOTE_MAX_CHARS` and `evidenceRowSchema`
- * from '@anomaly-technology/gub-schemas' (the schema's refinements are the same
- * row-level CHECKs asserted below); the closed sets already come from the
- * identity module's mirror, which has its own drift test.
+ * `EvidenceRowShape` is repo-local: it is the package's `EvidenceRow` minus the
+ * columns the DB and the sink assign (`id`, `created_at`, `sync_run_id`), with
+ * `source` narrowed to this tier. `EVIDENCE_QUOTE_MAX_CHARS` is the package's
+ * (gub-schemas 1.26.0). `assertEvidenceInvariants` asserts the same row-level
+ * CHECKs as the package's `evidenceRowSchema` refinements, on the stage's shape.
  *
  * Wire format: snake_case, ISO dates (YYYY-MM-DD). A Prisma writer maps these
  * to the camelCase model fields.
  */
 import crypto from 'node:crypto';
+import { EVIDENCE_QUOTE_MAX_CHARS } from '@anomaly-technology/gub-schemas';
 import {
   PERSON_KINDS,
   ROLE_NORMS,
@@ -25,7 +23,7 @@ import {
   type WithheldReason,
 } from '../identity';
 
-export const EVIDENCE_QUOTE_MAX_CHARS = 300;
+export { EVIDENCE_QUOTE_MAX_CHARS };
 
 /** C0 control characters and DEL, NUL included: Postgres text rejects 0x00 (22021). */
 // eslint-disable-next-line no-control-regex -- matching control characters is the point
