@@ -86,14 +86,13 @@ describe('PgEvidenceReader', () => {
 });
 
 describe('PgCatalogLoader', () => {
-  it('reads the account industry, campaigns with banded-budget inputs, and pieces', async () => {
+  it('reads the account id, the campaign status and dates, and pieces', async () => {
     const { db, calls } = fakeDb([
-      [{ id: ACCOUNT, industry: 'automotive' }],
+      [{ id: ACCOUNT }],
       [
         {
           id: uid(3, 1),
           status: 'lost',
-          budget: '90000.5',
           awardedAt: null,
           liveAt: null,
           endsAt: null,
@@ -102,8 +101,9 @@ describe('PgCatalogLoader', () => {
       [{ id: uid(4, 1), campaignId: uid(3, 1), jobNumber: null }],
     ]);
     const out = await new PgCatalogLoader(db).load(ACCOUNT);
-    expect(out.account).toEqual({ id: ACCOUNT, category: 'automotive' });
-    expect(out.campaigns[0]).toMatchObject({ accountId: ACCOUNT, status: 'lost', budget: 90000.5 });
+    expect(out.account).toEqual({ id: ACCOUNT });
+    expect(out.campaigns[0]).toMatchObject({ accountId: ACCOUNT, status: 'lost' });
+    expect(out.campaigns[0]).not.toHaveProperty('budget');
     expect(out.pieces[0]?.jobNumber).toBeNull();
     expect(calls.map((c) => c.sql.match(/FROM (\w+)/)?.[1])).toEqual([
       'accounts',
@@ -261,6 +261,8 @@ describe('PgExperienceWriter', () => {
       claims: c,
     });
     expect(log[2]!.values).toContain(uid(7, 7));
+    for (const col of ['account_category', 'project_type', 'outcome', 'budget_band'])
+      expect(log[2]!.sql).not.toContain(col);
     expect(log[2]!.values).toContain(c[0]!.row.experienceHash);
     const first = c[0]!.evidenceIds[0]!;
     expect(log[3]!.values).toContain(linkId(c[0]!.row.id, first));
@@ -295,7 +297,7 @@ describe('PgExperienceWriter', () => {
     const experienceInserts = log.filter((s) => /INSERT INTO experience \(/.test(s.sql));
     expect(experienceInserts).toHaveLength(2);
     expect(Math.max(...experienceInserts.map((s) => s.values.length))).toBeLessThan(65535);
-    expect(EXPERIENCE_INSERT_BATCH * 19).toBeLessThan(65535);
+    expect(EXPERIENCE_INSERT_BATCH * 15).toBeLessThan(65535);
     expect(LINK_INSERT_BATCH * 3).toBeLessThan(65535);
   });
 

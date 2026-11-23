@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { scoreClaim, budgetBand, type ScoreRow } from '../score';
+import { scoreClaim, type ScoreRow } from '../score';
 import {
   BREADTH_MAX_EXTRA,
   BREADTH_STEP,
-  BUDGET_BAND_CUTS,
   LOST_PITCH_FACTOR,
   SERVE_MIN_CONFIDENCE,
   TIER_CEILING,
@@ -147,30 +146,5 @@ describe('scoreClaim: properties', () => {
         scoreClaim(rows, 1).confidence,
       );
     }
-  });
-});
-
-describe('budgetBand (TEMPORARY cut points)', () => {
-  it('bands at the named cut points', () => {
-    expect(budgetBand(1)).toBe('small');
-    expect(budgetBand(BUDGET_BAND_CUTS.mediumFrom - 1)).toBe('small');
-    expect(budgetBand(BUDGET_BAND_CUTS.mediumFrom)).toBe('medium');
-    expect(budgetBand(BUDGET_BAND_CUTS.largeFrom - 1)).toBe('medium');
-    expect(budgetBand(BUDGET_BAND_CUTS.largeFrom)).toBe('large');
-    expect(budgetBand(BUDGET_BAND_CUTS.veryLargeFrom - 1)).toBe('large');
-    expect(budgetBand(BUDGET_BAND_CUTS.veryLargeFrom)).toBe('very_large');
-  });
-
-  it('keeps the agreed temporary values', () => {
-    expect(BUDGET_BAND_CUTS).toEqual({
-      mediumFrom: 250_000,
-      largeFrom: 1_000_000,
-      veryLargeFrom: 2_500_000,
-    });
-  });
-
-  it('unknown, zero, negative and non-finite budgets are null', () => {
-    for (const b of [null, 0, -5, Number.NaN, Number.POSITIVE_INFINITY])
-      expect(budgetBand(b)).toBeNull();
   });
 });

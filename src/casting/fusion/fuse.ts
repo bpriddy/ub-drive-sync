@@ -1,7 +1,7 @@
 /**
  * Layer 1 -> Layer 2: the deterministic fusion function.
  *
- * `fuse` is a pure function of its input (Layer 1 rows, accounts, campaigns,
+ * `fuse` is a pure function of its input (Layer 1 rows, campaigns,
  * pieces, staff). It reads no clock, no database, no environment and calls no
  * model. The same input in any row order gives identical claims, hashes, ids and
  * metrics. The formula is documented in score.ts and docs/casting-fusion.md.
@@ -39,7 +39,7 @@ import {
 import { assertExperienceInvariants } from './invariants';
 import { addDays, deriveClaimPeriod, envelope, campaignPeriod, periodsOverlap } from './period';
 import { createProjectResolver, type ProjectRef } from './project';
-import { budgetBand, scoreClaim, type ScoreRow } from './score';
+import { scoreClaim, type ScoreRow } from './score';
 import { supersedeByVersion } from './supersede';
 import type {
   FusedClaim,
@@ -193,7 +193,6 @@ export function fuse(input: FusionInput): FusionOutput {
   metrics.superseded = superseded;
 
   const staffById = new Map<string, FusionStaff>(input.staff.map((s) => [s.staffId, s]));
-  const accountById = new Map(input.accounts.map((a) => [a.id, a]));
   const resolve = createProjectResolver(input.campaigns, input.pieces);
 
   // 3. project per row; project-level facts (T1 period rows, coverage flags).
@@ -377,8 +376,6 @@ export function fuse(input: FusionInput): FusionOutput {
       periodStart: p.period.start,
     });
     const id = experienceId(FUSION_VERSION, hash);
-    const piece = p.ref.piece;
-    const campaign = p.ref.campaign;
     const validation = validationLabel(p.period.start, p.period.end, p.score.tiers.includes('T2'));
     return {
       row: {
@@ -394,10 +391,6 @@ export function fuse(input: FusionInput): FusionOutput {
         periodEnd: p.period.end,
         confidence: p.score.confidence,
         withheldReason: p.reason,
-        accountCategory: accountById.get(p.accountId)?.category ?? null,
-        projectType: piece?.projectType ?? campaign?.projectType ?? null,
-        outcome: campaign?.status ?? null,
-        budgetBand: budgetBand(campaign?.budget ?? null),
         fusionVersion: FUSION_VERSION,
         experienceHash: hash,
       },

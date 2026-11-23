@@ -1,22 +1,5 @@
 {
-  "$comment": "Snapshot of the gub-schemas casting sets the fusion stage mirrors (unpublished 1.23.0). Edit only when the source changes; src/casting/fusion/vocab.ts must follow in the same commit.",
-  "project_types": [
-    "tv_commercial",
-    "digital_video",
-    "social",
-    "website",
-    "app_or_interactive",
-    "print",
-    "out_of_home",
-    "audio",
-    "experiential_event",
-    "brand_identity",
-    "packaging",
-    "integrated_campaign",
-    "strategy_research",
-    "other"
-  ],
-  "budget_bands": ["small", "medium", "large", "very_large"],
+  "$comment": "Snapshot of the gub-schemas casting sets the fusion stage mirrors (unpublished 1.23.0, source commit e305c25). Edit only when the source changes; src/casting/fusion/vocab.ts must follow in the same commit.",
   "min_confidence": 0.7,
   "min_tiers": 2
 }

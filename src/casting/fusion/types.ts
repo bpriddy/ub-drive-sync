@@ -5,15 +5,7 @@
  * Experience and ExperienceEvidenceLink (unpublished 1.23.0, read at the local
  * epic's source tree). Declared here because that version is not pinned yet.
  */
-import type {
-  BudgetBand,
-  EvidenceSource,
-  PersonKind,
-  ProjectType,
-  RoleNorm,
-  Seniority,
-  WithheldReason,
-} from './vocab';
+import type { EvidenceSource, PersonKind, RoleNorm, Seniority, WithheldReason } from './vocab';
 import type { Tier } from './constants';
 
 /**
@@ -43,10 +35,9 @@ export interface FusionEvidence {
   extractorVersion: string;
 }
 
+/** An account the catalog knows. Fusion needs only that it exists. */
 export interface FusionAccount {
   id: string;
-  /** `accounts.industry` */
-  category: string | null;
 }
 
 export interface FusionCampaign {
@@ -54,20 +45,15 @@ export interface FusionCampaign {
   accountId: string;
   /** `campaigns.status`: pitch, awarded, in_progress, live, paused, ended, lost. */
   status: string | null;
-  /** `campaigns.budget` as a number; null = unknown. */
-  budget: number | null;
   awardedAt: string | null;
   liveAt: string | null;
   endsAt: string | null;
-  /** Nobody derives this yet (open question); a stage that does can pass it here. */
-  projectType?: ProjectType | null | undefined;
 }
 
 export interface FusionPiece {
   id: string;
   campaignId: string;
   jobNumber: string | null;
-  projectType?: ProjectType | null | undefined;
 }
 
 export interface FusionStaff {
@@ -80,7 +66,6 @@ export interface FusionStaff {
 
 export interface FusionInput {
   evidence: readonly FusionEvidence[];
-  accounts: readonly FusionAccount[];
   campaigns: readonly FusionCampaign[];
   pieces: readonly FusionPiece[];
   staff: readonly FusionStaff[];
@@ -108,10 +93,6 @@ export interface ExperienceDraft {
   periodEnd: string | null;
   confidence: number;
   withheldReason: WithheldReason | null;
-  accountCategory: string | null;
-  projectType: ProjectType | null;
-  outcome: string | null;
-  budgetBand: BudgetBand | null;
   fusionVersion: string;
   experienceHash: string;
 }

@@ -1,5 +1,5 @@
 {
-  "$comment": "Snapshot of the gub-schemas casting vocabularies at source commit f8cf59f (unpublished 1.23.0). Edit only when the source changes; src/casting/identity/vocab.ts must follow in the same commit.",
+  "$comment": "Snapshot of the gub-schemas casting vocabularies at source commit e305c25 (unpublished 1.23.0). Edit only when the source changes; src/casting/identity/vocab.ts must follow in the same commit.",
   "role_norms": [
     "executive_creative_director",
     "creative_director",

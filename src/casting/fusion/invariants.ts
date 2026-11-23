@@ -4,7 +4,7 @@
  * 1.23.0). A violation is a bug in this stage, never data, so it throws.
  */
 import type { ExperienceDraft } from './types';
-import { BUDGET_BANDS, PROJECT_TYPES, ROLE_NORMS, SENIORITIES, WITHHELD_REASONS } from './vocab';
+import { ROLE_NORMS, SENIORITIES, WITHHELD_REASONS } from './vocab';
 
 const inSet = (set: readonly string[], v: string | null): boolean => v === null || set.includes(v);
 
@@ -17,8 +17,6 @@ export function assertExperienceInvariants(r: ExperienceDraft): void {
   if (!inSet(ROLE_NORMS, r.roleNorm)) fail('role_norm');
   if (!inSet(SENIORITIES, r.seniority)) fail('seniority');
   if (!inSet(WITHHELD_REASONS, r.withheldReason)) fail('withheld_reason');
-  if (!inSet(PROJECT_TYPES, r.projectType)) fail('project_type');
-  if (!inSet(BUDGET_BANDS, r.budgetBand)) fail('budget_band');
   if (!(r.confidence >= 0 && r.confidence <= 1)) fail('confidence range');
   if (r.periodStart !== null && r.periodEnd !== null && r.periodEnd < r.periodStart)
     fail('period order');
