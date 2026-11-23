@@ -29,6 +29,7 @@ import {
 import {
   claimHash,
   assertEvidenceInvariants,
+  cleanText,
   type EvidenceDraft,
   type EvidenceRowShape,
 } from './row';
@@ -83,8 +84,18 @@ function reasonOf(r: IdentityResolution): string | null {
 export function mentionsToDrafts(input: ResolveDocInput, counts: ResolveCounts): EvidenceDraft[] {
   const out: EvidenceDraft[] = [];
   const seen = new Set<string>();
-  for (const m of input.mentions) {
+  for (const raw of input.mentions) {
     counts.mentions++;
+    // Ledgers written before the parser cleaned control characters can hold a NUL,
+    // which Postgres text rejects: clean every text field the row stores or hashes.
+    const m = {
+      ...raw,
+      rawName: cleanText(raw.rawName),
+      rawRole: cleanText(raw.rawRole),
+      quote: cleanText(raw.quote),
+      location: cleanText(raw.location),
+      periodText: cleanText(raw.periodText),
+    };
     // What the text says is the claim's identity; what the row stores is limited by the run date.
     const stated = parsePeriodText(m.periodText, input.now);
     const period = clampToRunDate(stated, runDay(input.now));

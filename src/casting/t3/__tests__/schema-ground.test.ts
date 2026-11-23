@@ -242,3 +242,26 @@ describe('parsePeriod', () => {
     }
   });
 });
+
+describe('control characters', () => {
+  it('cleanText replaces NUL and other C0 controls with a space and collapses whitespace', async () => {
+    const { cleanText } = await import('../row');
+    expect(cleanText('Jane\u0000Roe')).toBe('Jane Roe');
+    expect(cleanText('a\u0007 \u001fb\u007f')).toBe('a b');
+    expect(cleanText('keep\ttabs\nand lines')).toBe('keep tabs and lines');
+    expect(cleanText(null)).toBeNull();
+  });
+
+  it('the parser strips a NUL from names, roles and quotes', () => {
+    const r = parseMentionsResponse(
+      wrap([
+        item({
+          raw_role: 'Senior\u0000Copywriter',
+          quote: 'Senior Copywriter:\u0000Zofia Marek-Lindqvist',
+        }),
+      ]),
+    );
+    expect(r.ok && r.mentions[0]?.rawRole).toBe('Senior Copywriter');
+    expect(r.ok && r.mentions[0]?.quote).toBe('Senior Copywriter: Zofia Marek-Lindqvist');
+  });
+});

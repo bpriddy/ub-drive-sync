@@ -15,7 +15,7 @@
  */
 import { Type, type Schema } from '@google/genai';
 import { z } from 'zod';
-import { EVIDENCE_QUOTE_MAX_CHARS } from './row';
+import { EVIDENCE_QUOTE_MAX_CHARS, cleanText } from './row';
 
 export const DOC_TYPES = [
   'credits_or_team',
@@ -135,7 +135,7 @@ const UUID_LIKE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 /** A Drive-id-looking token: one long unbroken run of id characters. */
 const OPAQUE_TOKEN = /[A-Za-z0-9_-]{25,}/;
 
-const squash = (s: string): string => s.replace(/\s+/g, ' ').trim();
+const squash = (s: string): string => cleanText(s);
 
 function looksLikeUrlOrId(s: string): boolean {
   return URL_LIKE.test(s) || UUID_LIKE.test(s) || OPAQUE_TOKEN.test(s);
