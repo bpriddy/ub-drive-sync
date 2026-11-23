@@ -1,0 +1,5 @@
+{
+  "$comment": "Snapshot of the gub-schemas serving thresholds as of 1.26.0. A gub-schemas bump that changes one fails vocab-drift.test.ts: review the change, then update this file in the same commit as the bump.",
+  "min_confidence": 0.7,
+  "min_tiers": 2
+}

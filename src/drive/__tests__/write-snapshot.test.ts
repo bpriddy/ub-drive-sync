@@ -16,7 +16,7 @@ const { create } = vi.hoisted(() => ({ create: vi.fn() }));
 vi.mock('../../prisma', () => ({ prisma: { driveFileSnapshot: { create } } }));
 vi.mock('../../logger', () => ({ logger: { warn: vi.fn() } }));
 
-import { writeSnapshot } from '../snapshot';
+import { snapshotForScanOutcome, writeSnapshot } from '../snapshot';
 import type { TraversedFile } from '../types';
 
 const file: TraversedFile = {
@@ -64,5 +64,69 @@ describe('writeSnapshot', () => {
 
     expect(written().syncRunId).toBe('v1-run');
     expect(written().driveSyncRunId).toBeNull();
+  });
+
+  describe('created_time', () => {
+    it('writes the file’s createdTime as a Date', async () => {
+      await writeSnapshot({
+        syncRunId: null,
+        scope,
+        file: { ...file, createdTime: '2025-03-04T05:06:07.000Z' },
+        wasExtracted: false,
+      });
+
+      expect(written().createdTime).toEqual(new Date('2025-03-04T05:06:07.000Z'));
+    });
+
+    it('writes NULL when the file has no createdTime', async () => {
+      await writeSnapshot({ syncRunId: null, scope, file, wasExtracted: false });
+
+      expect(written()).toHaveProperty('createdTime', null);
+    });
+
+    it('writes NULL, not a failed row, for a value that is not a date', async () => {
+      await writeSnapshot({
+        syncRunId: null,
+        scope,
+        file: { ...file, createdTime: 'not a date' },
+        wasExtracted: false,
+      });
+
+      expect(written().createdTime).toBeNull();
+    });
+
+    it('lets the caller name the value, null included', async () => {
+      const at = new Date('2024-01-02T00:00:00.000Z');
+      await writeSnapshot({
+        syncRunId: null,
+        scope,
+        file: { ...file, createdTime: '2025-03-04T05:06:07.000Z' },
+        wasExtracted: false,
+        createdTime: at,
+      });
+      await writeSnapshot({
+        syncRunId: null,
+        scope,
+        file: { ...file, createdTime: '2025-03-04T05:06:07.000Z' },
+        wasExtracted: false,
+        createdTime: null,
+      });
+
+      expect(create.mock.calls[0]![0].data.createdTime).toEqual(at);
+      expect(create.mock.calls[1]![0].data.createdTime).toBeNull();
+    });
+
+    it('is written for the scan-core, v1 and catch-up callers alike: one writer, no per-caller field', async () => {
+      const dated = { ...file, createdTime: '2025-03-04T05:06:07.000Z' };
+      await writeSnapshot({ syncRunId: 'v1-run', scope, file: dated, wasExtracted: true });
+      await writeSnapshot({
+        ...snapshotForScanOutcome({ file: dated, kind: 'ok', contentHash: 'h' }, scope, RUN),
+      });
+      await writeSnapshot({ syncRunId: null, scope, file: dated, wasExtracted: false });
+
+      for (const call of create.mock.calls) {
+        expect(call[0].data.createdTime).toEqual(new Date('2025-03-04T05:06:07.000Z'));
+      }
+    });
   });
 });

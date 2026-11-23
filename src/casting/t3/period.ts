@@ -1,0 +1,148 @@
+/**
+ * Period text to dates. The model returns the period as written; code turns it
+ * into `period_start` / `period_end` only when the text is unambiguous, else
+ * both stay null (a project period is derived from folder context elsewhere,
+ * never guessed from a file date).
+ *
+ * Understood: 2023, 2023-05, 2023-05-14, "May 2023", "Q3 2023", and ranges of
+ * those joined by "-", "to", an en dash or "through". Anything else (including
+ * fiscal-year forms such as "FY27", which are not calendar years): null.
+ *
+ * Run-date policy (clampToRunDate): a period that starts after the run date is
+ * unknown, one that ends after it is clamped to it. The run date comes from the
+ * run's injected clock (`now`), never from the system clock inside this module.
+ */
+
+const MONTHS: Readonly<Record<string, number>> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
+
+export interface Period {
+  readonly start: string | null;
+  readonly end: string | null;
+}
+
+const NONE: Period = { start: null, end: null };
+const MIN_YEAR = 1990;
+
+const pad = (n: number): string => String(n).padStart(2, '0');
+
+function lastDay(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/** One point of a range as an inclusive [start, end] pair, or null. */
+function point(raw: string, maxYear: number): [string, string] | null {
+  const t = raw.trim().toLowerCase().replace(/[.,]/g, '');
+  let m = /^(\d{4})$/.exec(t);
+  if (m) {
+    const y = Number(m[1]);
+    return y >= MIN_YEAR && y <= maxYear ? [`${y}-01-01`, `${y}-12-31`] : null;
+  }
+  m = /^(\d{4})-(\d{2})$/.exec(t);
+  if (m) {
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    if (y < MIN_YEAR || y > maxYear || mo < 1 || mo > 12) return null;
+    return [`${y}-${pad(mo)}-01`, `${y}-${pad(mo)}-${pad(lastDay(y, mo))}`];
+  }
+  m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+  if (m) {
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    if (y < MIN_YEAR || y > maxYear || mo < 1 || mo > 12 || d < 1 || d > lastDay(y, mo))
+      return null;
+    const iso = `${y}-${pad(mo)}-${pad(d)}`;
+    return [iso, iso];
+  }
+  m = /^([a-z]+) (\d{4})$/.exec(t);
+  if (m) {
+    const mo = MONTHS[m[1] as string];
+    const y = Number(m[2]);
+    if (!mo || y < MIN_YEAR || y > maxYear) return null;
+    return [`${y}-${pad(mo)}-01`, `${y}-${pad(mo)}-${pad(lastDay(y, mo))}`];
+  }
+  m = /^q([1-4]) (\d{4})$/.exec(t);
+  if (m) {
+    const q = Number(m[1]);
+    const y = Number(m[2]);
+    if (y < MIN_YEAR || y > maxYear) return null;
+    const first = (q - 1) * 3 + 1;
+    const last = first + 2;
+    return [`${y}-${pad(first)}-01`, `${y}-${pad(last)}-${pad(lastDay(y, last))}`];
+  }
+  return null;
+}
+
+/**
+ * Years further ahead than this are a misread, not a plan. Parsing stays wide on
+ * purpose: "2025-2028" is a real range whose end the run date clamps.
+ */
+const MAX_YEARS_AHEAD = 5;
+
+/**
+ * The period exactly as the text states it, with no reference to today: the
+ * claim's identity (claim_hash) is computed from this, so it does not move
+ * with the day a run happens.
+ */
+export function parsePeriodText(text: string | null, now: Date): Period {
+  if (!text) return NONE;
+  const maxYear = now.getUTCFullYear() + MAX_YEARS_AHEAD;
+  const single = point(text, maxYear);
+  if (single) return { start: single[0], end: single[1] };
+  const parts = text.split(
+    /\s+(?:to|through|thru)\s+|\s*[–—]\s*|\s+-\s+|(?<=\d)-(?=[A-Za-z])|(?<=^\d{4})-(?=\d{4}$)/i,
+  );
+  if (parts.length !== 2) return NONE;
+  const a = point(parts[0] as string, maxYear);
+  const b = point(parts[1] as string, maxYear);
+  if (!a || !b || b[1] < a[0]) return NONE;
+  return { start: a[0], end: b[1] };
+}
+
+/** The run date as a calendar day (UTC), from the injected clock value. */
+export const runDay = (now: Date): string => now.toISOString().slice(0, 10);
+
+/**
+ * Work cannot have happened after the run date, so a period read from a
+ * document is limited by it:
+ *  - it starts after the run date (a plan or a deck about a future year): unknown;
+ *  - it ends after the run date: the end is clamped to the run date;
+ *  - if the clamped end is still before the start: unknown (defensive: with the
+ *    first rule applied first this cannot happen for a well-formed period).
+ */
+export function clampToRunDate(p: Period, today: string): Period {
+  if (p.start === null || p.end === null) return NONE;
+  if (p.start > today) return NONE;
+  const end = p.end > today ? today : p.end;
+  return end < p.start ? NONE : { start: p.start, end };
+}
+
+/** Period text to dates, with the run-date policy applied. `now` is the run's injected clock. */
+export function parsePeriod(text: string | null, now: Date): Period {
+  return clampToRunDate(parsePeriodText(text, now), runDay(now));
+}

@@ -52,6 +52,7 @@ The same run id is stamped as `drive_sync_run_id` on the review proposals
 |---|---|
 | `file_id` | Drive file id; the key readers group by. |
 | `name`, `mime_type`, `modified_time`, `modified_by`, `size_bytes` | The file as the run saw it. |
+| `created_time` | Drive's `createdTime` of the file, written by all three writers. **NULL** on every row written before the column existed, and when the listing carried none: readers must tolerate NULL. The catch-up fills it in for older files (reason `created_time_missing`, below). |
 | `path` | ` / `-separated breadcrumb. **v1** roots it at the name of the entity the scan was for: an account scan at the account, a campaign scan at the campaign. So a file inside a campaign folder can have an account-rooted row and a campaign-rooted row from the same v1 run. **v2** roots every path at the account (queue-driven runs are always account-scoped). |
 | `account_id` | The account the run belongs to. |
 | `campaign_id` | **v2**: the file's *folder attribution* — the campaign whose folder the file sits in, NULL for account-level files — not whatever campaign an LLM tag routed its observations to. **v1**: set by campaign scans, NULL on account scans. |
@@ -248,6 +249,24 @@ wins; no match means no row.
 | `moved` | `path` |
 | `modified` | `modified_time` |
 | `mime_changed` | `mime_type` |
+| `created_time_missing` | `created_time` is NULL while the listing has a `createdTime`. Checked last, so a file that also differs in a column above gets its one row for that reason, and that row carries the `created_time` too. |
+
+A `created_time_missing` row is an ordinary catch-up row (`skip_reason =
+'index_refresh'`): `checkDelta` and the unchanged-content gate ignore it like
+any other. **It adds one row per affected file** — every file whose latest row
+predates the column — so the first catch-up after the column exists grows the
+table by about the number of indexed files [MEASURE: dry-run counts per
+account, the `created_time_missing` figure]. After it the latest row has a
+`created_time`, so a re-run writes nothing. A file whose listing has no
+`createdTime` is never selected (it could not be filled in, and would repeat on
+every run).
+
+**Deploy order.** The column arrives with gub-schemas 1.26.0 and the matching
+UB migration. Apply the migration **before** deploying an image built against
+it, for the reason given under `drive_sync_run_id` above: every create on
+`drive_file_snapshots` names the column, and the catch-up's latest-row query
+selects it, so a database without it fails them with P2022 (the create) or
+42703 (the raw query).
 
 **The listing.** A root inside a shared drive (the drive root included) is
 listed flat, about one `files.list` call per 1000 items of the drive and not one
