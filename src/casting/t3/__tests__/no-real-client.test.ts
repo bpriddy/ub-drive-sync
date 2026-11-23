@@ -118,7 +118,11 @@ describe('static: who may reach the client, config or the extractor', () => {
   it('every non-test source file imports only relative modules or an allowlist of packages', () => {
     const allowed = new Set(['@google/genai', 'zod', 'node:crypto', 'node:fs', 'node:path']);
     // The one deliberate addition for the ledger loader: the Postgres sink talks to Prisma.
-    const perFile: Record<string, readonly string[]> = { 'pg-sink.ts': ['@prisma/client'] };
+    // row.ts takes the closed sets and the quote limit from the schemas package (pure constants).
+    const perFile: Record<string, readonly string[]> = {
+      'pg-sink.ts': ['@prisma/client'],
+      'row.ts': ['@anomaly-technology/gub-schemas'],
+    };
     for (const s of sources) {
       for (const m of codeOf(s.text).matchAll(/from '([^']+)'/g)) {
         const spec = m[1] as string;

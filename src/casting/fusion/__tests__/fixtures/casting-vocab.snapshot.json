@@ -1,5 +1,5 @@
 {
-  "$comment": "Snapshot of the gub-schemas casting sets the fusion stage mirrors (unpublished 1.26.0, source commit e305c25). Edit only when the source changes; src/casting/fusion/vocab.ts must follow in the same commit.",
+  "$comment": "Snapshot of the gub-schemas serving thresholds as of 1.26.0. A gub-schemas bump that changes one fails vocab-drift.test.ts: review the change, then update this file in the same commit as the bump.",
   "min_confidence": 0.7,
   "min_tiers": 2
 }
