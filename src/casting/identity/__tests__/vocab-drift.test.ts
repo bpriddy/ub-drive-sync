@@ -8,11 +8,11 @@ import {
   WITHHELD_REASONS,
 } from '../vocab';
 
-// The literals in ../vocab mirror gub-schemas src/casting.ts at source commit f8cf59f
+// The literals in ../vocab mirror gub-schemas src/casting.ts at source commit e305c25
 // (unpublished 1.23.0). This test fails when the module and the snapshot drift apart.
 // After 1.23.0 is pinned, import the sets from the package in ../vocab and keep this
 // test: it then compares the package exports with the snapshot.
-describe('casting vocabulary mirror (source commit f8cf59f)', () => {
+describe('casting vocabulary mirror (source commit e305c25)', () => {
   it('role_norm set and order match the snapshot', () => {
     expect([...ROLE_NORMS]).toEqual(snapshot.role_norms);
   });

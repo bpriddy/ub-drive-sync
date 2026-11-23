@@ -69,24 +69,6 @@ export const PITCH_LOST_STATUSES: ReadonlySet<string> = new Set(['lost']);
  */
 export const LOST_PITCH_FACTOR = 0.7;
 
-// ── Budget bands (TEMPORARY) ────────────────────────────────────────────────
-
-/**
- * TEMPORARY cut points of `campaigns.budget` (currency: whatever the column
- * holds, not converted), accepted 2026-11-19 as a placeholder until the real
- * budget distribution is measured. [DECIDE at S1/S2 close.]
- *   budget <  mediumFrom                    -> small
- *   mediumFrom   <= budget < largeFrom      -> medium
- *   largeFrom    <= budget < veryLargeFrom  -> large
- *   budget >= veryLargeFrom                 -> very_large
- * A missing or non-positive budget gives NULL (unknown).
- */
-export const BUDGET_BAND_CUTS = {
-  mediumFrom: 250_000,
-  largeFrom: 1_000_000,
-  veryLargeFrom: 2_500_000,
-} as const;
-
 // ── Conflicts ───────────────────────────────────────────────────────────────
 
 /**
@@ -126,7 +108,7 @@ export const INCOMPATIBLE_ROLE_PAIRS: readonly IncompatibleRolePair[] = [
  */
 export const STORE_PRESENCE_ONLY_CLAIMS = false;
 
-/** Rows per INSERT into `experience` (19 columns each, far below the 65535-parameter limit). */
+/** Rows per INSERT into `experience` (15 columns each, far below the 65535-parameter limit). */
 export const EXPERIENCE_INSERT_BATCH = 500;
 /** Rows per INSERT into `experience_evidence_links` (3 parameters each). */
 export const LINK_INSERT_BATCH = 2000;

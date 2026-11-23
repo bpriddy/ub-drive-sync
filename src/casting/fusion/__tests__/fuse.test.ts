@@ -61,10 +61,6 @@ describe('a served claim', () => {
       periodEnd: '2023-06-30',
       confidence: 0.938, // 1 - 0.1 * 0.7 * 0.88
       withheldReason: null,
-      accountCategory: 'automotive',
-      projectType: 'tv_commercial',
-      outcome: 'awarded',
-      budgetBand: 'large',
       fusionVersion: 'fusion-v1',
     });
     expect(c.tiers).toEqual(['T1', 'T2', 'T3']);
@@ -98,21 +94,48 @@ describe('a served claim', () => {
     expect(out.claims[0]?.validation).toBe('not_validated');
   });
 
-  it('project type falls back from piece to campaign, and is null when nobody supplies it', () => {
-    const viaCampaign = fuse(
+  it('a rebuilt row carries no copied trait of the work', () => {
+    const out = fuse(
       baseInput([
-        t3('copywriter', { pieceId: null, campaignId: CAMPAIGN }),
-        t1({ pieceId: null, campaignId: CAMPAIGN }),
-      ]),
-    );
-    expect(viaCampaign.claims[0]?.row.projectType).toBe('integrated_campaign');
-    const none = fuse(
-      baseInput([
+        t3('art_director'),
+        t1(),
+        t2(),
         t3('copywriter', { pieceId: null, campaignId: CAMPAIGN_LOST }),
         t1({ pieceId: null, campaignId: CAMPAIGN_LOST }),
       ]),
     );
-    expect(none.claims[0]?.row.projectType).toBeNull();
+    expect(out.claims.length).toBeGreaterThan(0);
+    const removed = [
+      'accountCategory',
+      'projectType',
+      'outcome',
+      'budgetBand',
+      'account_category',
+      'project_type',
+      'budget_band',
+    ];
+    for (const c of out.claims) {
+      const keys = Object.keys(c.row);
+      for (const k of removed) expect(keys).not.toContain(k);
+    }
+    expect(Object.keys((out.claims[0] as FusedClaim).row).sort()).toEqual(
+      [
+        'id',
+        'staffId',
+        'accountId',
+        'jobNumber',
+        'campaignId',
+        'pieceId',
+        'roleNorm',
+        'seniority',
+        'periodStart',
+        'periodEnd',
+        'confidence',
+        'withheldReason',
+        'fusionVersion',
+        'experienceHash',
+      ].sort(),
+    );
   });
 });
 
@@ -237,7 +260,6 @@ describe('pitch handling', () => {
     );
     const c = lostOut.claims[0] as FusedClaim;
     expect(c.pitchFactor).toBe(0.7);
-    expect(c.row.outcome).toBe('lost');
     expect(c.row.confidence).toBe(0.708); // 1 - (1 - 0.63) * (1 - 0.21)
     expect(c.row.confidence).toBeLessThan(normal.claims[0]!.row.confidence);
     expect(c.row.withheldReason).toBeNull();

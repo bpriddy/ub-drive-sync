@@ -17,7 +17,7 @@ export type {
 } from './run';
 export { parseFusionArgs } from './args';
 export type { FusionArgs } from './args';
-export { scoreClaim, budgetBand, round3 } from './score';
+export { scoreClaim, round3 } from './score';
 export { compareExtractorVersion, supersedeByVersion } from './supersede';
 export { FUSION_VERSION, FUSION_SYNC_SOURCE } from './constants';
 export type {

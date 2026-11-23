@@ -116,7 +116,6 @@ export async function runFusion(deps: FusionDeps, options: FusionOptions): Promi
       const horizon = deps.activity === undefined ? null : await deps.activity.startOf(accountId);
       const out = fuse({
         evidence,
-        accounts: catalog.account === null ? [] : [catalog.account],
         campaigns: catalog.campaigns,
         pieces: catalog.pieces,
         staff,

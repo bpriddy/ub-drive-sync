@@ -70,27 +70,21 @@ export const staff = (): FusionStaff[] => [
   { staffId: STAFF_NEW, startedAt: '2025-06-01', isCurrent: true },
 ];
 
-export const accounts = (): FusionAccount[] => [
-  { id: ACCOUNT, category: 'automotive' },
-  { id: OTHER_ACCOUNT, category: 'confectionery' },
-];
+export const accounts = (): FusionAccount[] => [{ id: ACCOUNT }, { id: OTHER_ACCOUNT }];
 
 export const campaigns = (): FusionCampaign[] => [
   {
     id: CAMPAIGN,
     accountId: ACCOUNT,
     status: 'awarded',
-    budget: 1_200_000,
     awardedAt: '2023-02-01',
     liveAt: '2023-04-01',
     endsAt: '2023-12-31',
-    projectType: 'integrated_campaign',
   },
   {
     id: CAMPAIGN_LOST,
     accountId: ACCOUNT,
     status: 'lost',
-    budget: 90_000,
     awardedAt: null,
     liveAt: null,
     endsAt: null,
@@ -98,13 +92,12 @@ export const campaigns = (): FusionCampaign[] => [
 ];
 
 export const pieces = (): FusionPiece[] => [
-  { id: PIECE, campaignId: CAMPAIGN, jobNumber: PIECE_JOB, projectType: 'tv_commercial' },
+  { id: PIECE, campaignId: CAMPAIGN, jobNumber: PIECE_JOB },
 ];
 
 export function baseInput(evidence: FusionEvidence[]): FusionInput {
   return {
     evidence,
-    accounts: accounts(),
     campaigns: campaigns(),
     pieces: pieces(),
     staff: staff(),
@@ -180,7 +173,6 @@ export function generateInput(seed: number, opts: GeneratorOptions = {}): Fusion
       id: campaignId,
       accountId,
       status: pick(['pitch', 'awarded', 'in_progress', 'live', 'ended', 'lost', null]),
-      budget: chance(0.2) ? null : Math.floor(rnd() * 4_000_000),
       awardedAt: chance(0.3) ? null : day(year, 1 + Math.floor(rnd() * 6), 5),
       liveAt: chance(0.5) ? null : day(year, 7, 1),
       endsAt: chance(0.5) ? null : day(year, 12, 20),
@@ -321,7 +313,6 @@ export function generateInput(seed: number, opts: GeneratorOptions = {}): Fusion
   ]);
   return {
     evidence: rows,
-    accounts: accountIds.map((id, i) => ({ id, category: i === 2 ? null : `category-${i}` })),
     campaigns: campaignList,
     pieces: pieceList,
     staff: staffList,

@@ -34,7 +34,6 @@ describe('rebuild is a deterministic pure function of its input', () => {
         const shuffled: FusionInput = {
           ...input,
           evidence: shuffle(input.evidence, seed * 31 + k),
-          accounts: shuffle(input.accounts, seed + k),
           campaigns: shuffle(input.campaigns, seed + 2 * k),
           pieces: shuffle(input.pieces, seed + 3 * k),
           staff: shuffle(input.staff, seed + 4 * k),

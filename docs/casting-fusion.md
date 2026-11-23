@@ -67,7 +67,11 @@ the serving layer must read one version only.
   - one person with claims to both roles of an incompatible pair on the same
     project (`INCOMPATIBLE_ROLE_PAIRS`, below). Only the members of the pair are
     withheld; the person's other roles stay served.
-- Budget band cut points (250k / 1M / 2.5M) are TEMPORARY (`BUDGET_BAND_CUTS`).
+- The row holds no copied traits of the work (client category, project type,
+  outcome, budget band): those stay on accounts, campaigns and pieces, which the
+  row is keyed to by `account_id`, `campaign_id` and `piece_id`. A lost pitch still
+  lowers a claim's strength (factor 0.7, read from `campaigns.status` at fuse time);
+  the status is no longer stored on the row.
 - Recency is not in the formula. Older years are labelled `not_validated`
   (undated, or no T2 evidence behind the claim), never hidden below the threshold.
 

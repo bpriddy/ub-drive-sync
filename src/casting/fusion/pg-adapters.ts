@@ -147,16 +147,13 @@ export class PgCatalogLoader implements CatalogLoader {
   constructor(private readonly db: RawClient) {}
 
   async load(accountId: string): Promise<FusionCatalog> {
-    const accounts = await this.db.$queryRaw<
-      Array<{ id: string; industry: string | null }>
-    >(Prisma.sql`
-      SELECT id, industry FROM accounts WHERE id = ${accountId}::uuid
+    const accounts = await this.db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM accounts WHERE id = ${accountId}::uuid
     `);
     const campaigns = await this.db.$queryRaw<
       Array<{
         id: string;
         status: string | null;
-        budget: number | null;
         awardedAt: string | null;
         liveAt: string | null;
         endsAt: string | null;
@@ -164,7 +161,6 @@ export class PgCatalogLoader implements CatalogLoader {
     >(Prisma.sql`
       SELECT id,
              status,
-             budget::float8 AS budget,
              to_char(awarded_at, 'YYYY-MM-DD') AS "awardedAt",
              to_char(live_at, 'YYYY-MM-DD')    AS "liveAt",
              to_char(ends_at, 'YYYY-MM-DD')    AS "endsAt"
@@ -183,12 +179,11 @@ export class PgCatalogLoader implements CatalogLoader {
     `);
     const account = accounts[0];
     return {
-      account: account === undefined ? null : { id: account.id, category: account.industry },
+      account: account === undefined ? null : { id: account.id },
       campaigns: campaigns.map((c): FusionCampaign => ({
         id: c.id,
         accountId,
         status: c.status,
-        budget: c.budget === null ? null : Number(c.budget),
         awardedAt: c.awardedAt,
         liveAt: c.liveAt,
         endsAt: c.endsAt,
@@ -307,7 +302,6 @@ export class PgExperienceWriter implements ExperienceWriter {
           ${r.id}::uuid, ${r.staffId}::uuid, ${r.accountId}::uuid, ${r.jobNumber},
           ${r.campaignId}::uuid, ${r.pieceId}::uuid, ${r.roleNorm}, ${r.seniority},
           ${r.periodStart}::date, ${r.periodEnd}::date, ${r.confidence}::float8, ${r.withheldReason},
-          ${r.accountCategory}, ${r.projectType}, ${r.outcome}, ${r.budgetBand},
           ${r.fusionVersion}, ${args.syncRunId}::uuid, ${r.experienceHash}
         )`,
         );
@@ -316,7 +310,6 @@ export class PgExperienceWriter implements ExperienceWriter {
             id, staff_id, account_id, job_number,
             campaign_id, piece_id, role_norm, seniority,
             period_start, period_end, confidence, withheld_reason,
-            account_category, project_type, outcome, budget_band,
             fusion_version, sync_run_id, experience_hash
           ) VALUES ${Prisma.join(tuples)}
         `);

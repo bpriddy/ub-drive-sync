@@ -31,14 +31,12 @@
 import {
   BREADTH_MAX_EXTRA,
   BREADTH_STEP,
-  BUDGET_BAND_CUTS,
   SERVE_MIN_TIERS,
   TIERS,
   TIER_CEILING,
   UNCORROBORATED_CEILING,
   type Tier,
 } from './constants';
-import type { BudgetBand } from './vocab';
 
 export interface ScoreRow {
   tier: Tier;
@@ -83,13 +81,4 @@ export function scoreClaim(rows: readonly ScoreRow[], pitchFactor: number): Scor
   const corroborated = tiers.length >= SERVE_MIN_TIERS && tiers.includes('T3');
   if (!corroborated) combined = Math.min(combined, UNCORROBORATED_CEILING);
   return { confidence: round3(clamp01(combined)), tiers, tierScores, capped: !corroborated };
-}
-
-/** Budget -> band (cut points are TEMPORARY, see BUDGET_BAND_CUTS). */
-export function budgetBand(budget: number | null): BudgetBand | null {
-  if (budget === null || !Number.isFinite(budget) || budget <= 0) return null;
-  if (budget < BUDGET_BAND_CUTS.mediumFrom) return 'small';
-  if (budget < BUDGET_BAND_CUTS.largeFrom) return 'medium';
-  if (budget < BUDGET_BAND_CUTS.veryLargeFrom) return 'large';
-  return 'very_large';
 }
