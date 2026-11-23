@@ -236,7 +236,7 @@ deletes. `casting-drift --window-start` counts the served claims that ended befo
 see what a future retention rule would touch. No retention deletion is implemented; it needs a defined rule
 and a decision first.
 
-### Cloud Run Job form (built, not deployed)
+### Cloud Run Job form (deploy step built, no trigger)
 
 `node dist/src/casting/maintain/job-main.js` (`npm run casting-job` locally), same image, command overridden by
 the job definition (the image ENTRYPOINT stays `dist/src/main.js`). For each account it runs
@@ -265,11 +265,14 @@ cell count as `--expect-cells`/`--max-cells` and the share as `--max-usd`, with 
 (model preflight, lock, paid-twice by cell, ledger outside the repo). The share is a ceiling, not the
 estimate; actual spend per execution is bounded by the budget, not predicted.
 
-To put it in the cloud (NOT done here, each step needs the user's go): add the job to `deploy.yml` as a separate
-job (for example `gub-drive-sync-casting-<env>`, own runtime SA, `--command node --args dist/src/casting/maintain/job-main.js`,
-env above, no Scheduler trigger until the flags below are decided); give the SA read on the accounts database and
-Drive as the existing job has, a Vertex role only if T3 will ever be enabled, and a persistent ledger volume
-(GCS) only then; a narrow `run.developer` binding (the existing job can be fired with arbitrary args by the admin
-app's SA); then, last, a Cloud Scheduler trigger. Record in the decisions file: the D14 flags
-(`CASTING_JOB_APPLY`, `CASTING_T3_ENABLED`: `log` = plan-only, then `strict`; owner; flip signal; when each is
-deleted) and a D3 line for the `casting_purge` source.
+In the cloud: the job `gub-drive-sync-casting-<env>` is created as an inert shell by `scripts/setup-gcp.sh` (run once by the owner) and updated by the
+last step of `.github/workflows/deploy.yml` with the same image, `--command node --args dist/src/casting/maintain/job-main.js`,
+`DATABASE_URL` and the Cloud SQL attachment of the existing job, the existing runtime SA, `NODE_ENV=production`,
+`CASTING_JOB_ACCOUNT_IDS` from the GitHub Environment variable of the same name, and `CASTING_JOB_APPLY=false` as a literal.
+The step skips (it never fails) when the job is not provisioned or the variable is unset. The job reads and writes the
+database only (no Drive and no model call in the free stages), so it needs no Drive or Gemini secret. Flag values are
+strict: `CASTING_JOB_APPLY` is exactly `true` or `false` (the "off" in the table means `false` or unset; any other value
+refuses the job). No `CASTING_T3_*` variable is set, no Scheduler trigger exists, and no Vertex role or ledger volume is
+granted: each of those is part of a later decision (a Vertex role and a persistent ledger volume only if T3 will ever be
+enabled; a narrow `run.developer` binding and a Cloud Scheduler trigger last). The D14 flags (`CASTING_JOB_APPLY`,
+`CASTING_T3_ENABLED`) are recorded in the UB decisions file.

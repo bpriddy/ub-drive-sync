@@ -162,6 +162,35 @@ for ENV in "${ENVS[@]}"; do
   fi
 done
 
+# ── Casting job (casting staffing maintenance, docs/casting-pipeline.md §7) ──
+# Provisioned deliberately here, because the Deploy workflow only UPDATES it
+# and never creates it. Only for the live environment: os-test-491819 is UB
+# production and keeps the -dev names (D37). The job starts as an inert shell:
+# a public placeholder image, no CASTING_JOB_ACCOUNT_IDS (job-main refuses to
+# run without it), CASTING_JOB_APPLY=false and no CASTING_T3_* variables, so
+# the paid stage is impossible. It runs under the drive-sync runtime SA (it
+# needs only Cloud SQL and the database URL secret, which that SA already has).
+# No trigger and no scheduler: executions are started by hand until the
+# schedule and any T3 budget are approved.
+CASTING_ENV="dev"
+CASTING_JOB="gub-drive-sync-casting-$CASTING_ENV"
+echo ""
+echo "→ Creating casting job $CASTING_JOB (inert shell)..."
+if gcloud run jobs describe "$CASTING_JOB" --region="$REGION" >/dev/null 2>&1; then
+  echo "   (already exists, skipping)"
+else
+  gcloud run jobs create "$CASTING_JOB" \
+    --region="$REGION" \
+    --image="us-docker.pkg.dev/cloudrun/container/job:latest" \
+    --service-account="sa-gub-drive-sync-$CASTING_ENV@$PROJECT_ID.iam.gserviceaccount.com" \
+    --set-cloudsql-instances="$PROJECT_ID:$REGION:gub-platform" \
+    --set-env-vars="NODE_ENV=production,CASTING_JOB_APPLY=false" \
+    --tasks=1 --parallelism=1 --max-retries=0 --task-timeout=3600s \
+    --memory=2Gi --cpu=1 \
+    --quiet
+  echo "   created. The next Deploy of this repo puts the real image and command on it."
+fi
+
 # ── Cloud Build service account permissions ──────────────────────────────────
 echo ""
 echo "── Cloud Build permissions ───────────────────────────────────────────────"
