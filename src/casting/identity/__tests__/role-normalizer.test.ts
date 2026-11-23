@@ -68,6 +68,113 @@ const MAPPED: Row[] = [
   ['Business Manager', 'finance', null],
 ];
 
+// Rules added after a real run left half the staff mentions in `other`. Generic titles only.
+const EXTENDED: Row[] = [
+  // Account side: a lead is a director-level seat (as "Client Lead"), a supervisor is a manager.
+  ['Account Supervisor', 'account_manager', null],
+  ['Senior Account Supervisor', 'account_manager', 'senior'],
+  ['Account Lead', 'account_director', 'lead'],
+  ['Account Contact', 'account_manager', null],
+  ['Account Intern', 'account_executive', 'junior'],
+  ['Business Director', 'account_director', 'director'],
+  ['Group Business Director', 'account_director', 'director'],
+  // Production side.
+  ['Production', 'producer', null],
+  ['Senior Production', 'producer', 'senior'],
+  ['Production Director', 'executive_producer', 'director'],
+  ['Group Production Director', 'executive_producer', 'director'],
+  ['Director of Production', 'executive_producer', 'director'],
+  // Project side: Director is a marker here, unlike in Art Director.
+  ['Project Director', 'project_manager', 'director'],
+  ['Project Dir.', 'project_manager', 'director'],
+  ['Program Director', 'project_manager', 'director'],
+  ['Programme Director', 'project_manager', 'director'],
+  // Communications strategy is a strategy title; plain communications stays PR.
+  ['Head of Comms Strategy', 'strategy_director', 'director'],
+  ['Head of Communications Strategy', 'strategy_director', 'director'],
+  ['Director of Communications Strategy', 'strategy_director', 'director'],
+  ['Communications Strategy Director', 'strategy_director', 'director'],
+  ['Comms Strategy', 'strategist', null],
+  ['Communications Strategist', 'strategist', null],
+  ['Head of Comms', 'pr_specialist', 'director'],
+  ['Group Comms Director', 'pr_specialist', 'director'],
+  // Chief creative officer, with or without the Global prefix.
+  ['CCO', 'executive_creative_director', 'executive'],
+  ['Global CCO', 'executive_creative_director', 'executive'],
+  ['GCCO', 'executive_creative_director', 'executive'],
+  ['Chief Creative Officer & Partner', 'executive_creative_director', 'executive'],
+  ['Partner & Global CCO', 'executive_creative_director', 'executive'],
+  // Misspellings of the words the rules depend on.
+  ['Buisness Director', 'account_director', 'director'],
+  ['Buiness Director', 'account_director', 'director'],
+  ['Bus. Director', 'account_director', 'director'],
+];
+
+describe('normalizeRole: extended titles', () => {
+  it.each(EXTENDED)('%s -> %s / %s', (raw, role, seniority) => {
+    expect(normalizeRole(raw)).toEqual({ roleNorm: role, seniority, reason: 'mapped' });
+  });
+
+  it('CEO and CCO are executive markers', () => {
+    expect(normalizeRole('CEO')).toMatchObject({ roleNorm: 'other', seniority: 'executive' });
+    expect(normalizeRole('CCO').seniority).toBe('executive');
+  });
+
+  it('titles that need a vocabulary value nobody has approved stay `other`', () => {
+    for (const raw of [
+      'Business Affairs',
+      'Senior Business Affairs Manager',
+      'Head of Business Affairs',
+      'Buiness Affiars Manager',
+      'Business Operations Director',
+      'Head of Operations',
+      'Managing Partner',
+      'Founding Partner',
+      'Director of Music',
+      'Music Director',
+      'Director of Music Production',
+      'Music Production',
+      'Talent Manager',
+    ]) {
+      expect(normalizeRole(raw)).toMatchObject({ roleNorm: 'other', reason: 'unmapped' });
+    }
+  });
+
+  it('a bare Account is too vague to place and stays `other`', () => {
+    expect(normalizeRole('Account')).toMatchObject({ roleNorm: 'other', reason: 'unmapped' });
+  });
+
+  it('Production in a longer title does not become a producer', () => {
+    expect(normalizeRole('Production Designer').roleNorm).toBe('designer');
+    expect(normalizeRole('Music Production').roleNorm).toBe('other');
+    expect(normalizeRole('Production Company Liaison').roleNorm).toBe('other');
+  });
+
+  it('a business title that is not Business Director is not an account title', () => {
+    expect(normalizeRole('Business Lead').roleNorm).toBe('other');
+    expect(normalizeRole('Business Operations Manager').roleNorm).toBe('other');
+  });
+
+  it('a title naming a mapped and an unmapped role keeps the mapped one', () => {
+    expect(normalizeRole('Managing Partner & Global CCO')).toMatchObject({
+      roleNorm: 'executive_creative_director',
+      seniority: 'executive',
+      reason: 'mapped',
+    });
+  });
+
+  it('two mapped roles still conflict: Art Director / Copywriter stays `other`', () => {
+    expect(normalizeRole('Art Director / Copywriter')).toMatchObject({
+      roleNorm: 'other',
+      reason: 'multi_role',
+    });
+    expect(normalizeRole('Account Supervisor & Producer')).toMatchObject({
+      roleNorm: 'other',
+      reason: 'multi_role',
+    });
+  });
+});
+
 describe('normalizeRole: mapped titles', () => {
   it.each(MAPPED)('%s -> %s / %s', (raw, role, seniority) => {
     const r = normalizeRole(raw);
@@ -159,7 +266,7 @@ describe('normalizeRole: unknown, multiple and empty', () => {
       seniority: 'senior',
       reason: 'unmapped',
     });
-    expect(normalizeRole('Account Supervisor').roleNorm).toBe('other');
+    expect(normalizeRole('Account Wrangler').roleNorm).toBe('other');
   });
 
   it('two different roles in one title is `other`, never the first one', () => {
@@ -194,7 +301,7 @@ describe('normalizeRole: unknown, multiple and empty', () => {
   });
 
   it('every output value is in the closed sets', () => {
-    for (const [raw] of MAPPED) {
+    for (const [raw] of [...MAPPED, ...EXTENDED]) {
       const r = normalizeRole(raw);
       expect(ROLE_NORMS as readonly string[]).toContain(r.roleNorm);
       if (r.seniority !== null) expect(SENIORITIES as readonly string[]).toContain(r.seniority);
