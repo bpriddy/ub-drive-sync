@@ -2,7 +2,7 @@
  * The T3 sink on Postgres: one `sync_runs` row per run (D3) and Layer 1 `evidence` rows.
  *
  * Raw SQL for the evidence insert, shared with T1 and T2 (`PgEvidenceWriter`): the `evidence`
- * table exists only after the UB casting migration (gub-schemas 1.23.0) and the generated Prisma
+ * table exists only after the UB casting migration (gub-schemas 1.26.0) and the generated Prisma
  * client of this repo's pinned package does not know the model. `sync_runs` is an existing table,
  * so it goes through the client's `syncRun` model, as in T1 and T2.
  *
@@ -42,7 +42,7 @@ export function isUndefinedTable(err: unknown): boolean {
 }
 
 const MISSING_TABLE_MESSAGE =
-  'the evidence table does not exist in this database (Postgres 42P01): apply the UB casting migration (gub-schemas 1.23.0) first. Nothing was written';
+  'the evidence table does not exist in this database (Postgres 42P01): apply the UB casting migration (gub-schemas 1.26.0) first. Nothing was written';
 
 function toInsertRow(r: EvidenceRowShape, syncRunId: string): EvidenceInsertRow {
   return {

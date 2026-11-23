@@ -131,6 +131,6 @@ account and year, served claims per year split by `activity_checked` /
 ## Deploy order (the P2022 trap)
 
 The UB migration that creates `evidence`, `experience` and
-`experience_evidence_links` (gub-schemas 1.23.0) must be applied BEFORE the job
+`experience_evidence_links` (gub-schemas 1.26.0) must be applied BEFORE the job
 runs, in either mode: a dry-run reads `evidence` too. Before the migration both
 modes fail with Postgres 42P01 on purpose.

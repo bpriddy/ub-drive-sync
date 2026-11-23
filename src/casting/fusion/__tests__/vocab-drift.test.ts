@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import snapshot from './fixtures/casting-vocab.snapshot.json';
 import { CASTING_MIN_CONFIDENCE, CASTING_MIN_TIERS } from '../vocab';
 
-// The literals in ../vocab mirror gub-schemas src/casting.ts (unpublished 1.23.0,
+// The literals in ../vocab mirror gub-schemas src/casting.ts (unpublished 1.26.0,
 // source commit e305c25). This test fails when the module and the snapshot drift apart.
 describe('casting fusion vocabulary mirror', () => {
   it('serving thresholds match the snapshot', () => {

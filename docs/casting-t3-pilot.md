@@ -107,7 +107,7 @@ repeated.
 A finished ledger becomes `evidence` rows (source `drive_content`) with **no model call and no
 document read**: `src/casting/t3/load-main.ts` (core: `load.ts`, sink: `pg-sink.ts`). Order:
 
-1. **The UB casting migration (gub-schemas 1.23.0) is applied** to the target database. Before it,
+1. **The UB casting migration (gub-schemas 1.26.0) is applied** to the target database. Before it,
    `--apply` is refused (Postgres 42P01 turned into a plain message, exit 2) and creates nothing,
    not even a `sync_runs` row. The dry-run below reads only tables that exist today (`staff`), so it
    works before and after the migration.

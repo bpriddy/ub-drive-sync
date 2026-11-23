@@ -17,7 +17,7 @@ export const T3_SOURCE = 'drive_content' as const;
 
 /**
  * `sync_runs.source` of a T3 write (the ledger loader). Consistent with T1 'casting_t1' and
- * T2 'casting_t2'. [VERIFY: gub-schemas 1.23.0 has no CHECK or enum on sync_runs.source; the D3
+ * T2 'casting_t2'. [VERIFY: gub-schemas 1.26.0 has no CHECK or enum on sync_runs.source; the D3
  * record in gcp-universal-backend needs a line for this value.]
  */
 export const T3_SYNC_SOURCE = 'casting_t3';

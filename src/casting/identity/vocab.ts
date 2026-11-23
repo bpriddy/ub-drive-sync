@@ -2,11 +2,11 @@
  * Closed sets the identity module reads and writes.
  *
  * MIRROR, not a source of truth. These literals copy the casting vocabularies
- * of gub-schemas (`src/casting.ts`, unpublished 1.23.0, set contents frozen at
- * source commit e305c25). They are declared here only because 1.23.0 is not
+ * of gub-schemas (`src/casting.ts`, unpublished 1.26.0, set contents frozen at
+ * source commit e305c25). They are declared here only because 1.26.0 is not
  * published yet and this repo cannot import it.
  *
- * Once 1.23.0 is pinned in package.json, delete the literals below and
+ * Once 1.26.0 is pinned in package.json, delete the literals below and
  * re-export the package symbols instead (same names), for example:
  *
  *   export { ROLE_NORMS, SENIORITIES, PERSON_KINDS, WITHHELD_REASONS,

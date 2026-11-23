@@ -4,7 +4,7 @@
  *
  * Raw SQL on purpose, like the T1 / T2 adapters: `evidence`, `experience` and
  * `experience_evidence_links` exist only after the UB migration (gub-schemas
- * 1.23.0), and the generated Prisma client of this repo's pinned package does not
+ * 1.26.0), and the generated Prisma client of this repo's pinned package does not
  * know them. Raw SQL keeps the stage compiling and fails with a clear Postgres
  * error (42P01, relation "evidence" does not exist) instead of a late P2022.
  *

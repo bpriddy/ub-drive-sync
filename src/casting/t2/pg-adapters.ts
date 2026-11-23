@@ -8,7 +8,7 @@
  * know the model.
  *
  * DEPLOY ORDER (the P2022 trap): the UB migration that creates `evidence`
- * (gub-schemas 1.23.0) must be applied to the environment's database BEFORE
+ * (gub-schemas 1.26.0) must be applied to the environment's database BEFORE
  * this code runs in apply mode; before it, apply fails with 42P01 on purpose.
  * Dry-run reads only tables that exist today (drive_edit_stats,
  * drive_file_snapshots without created_time, people_resource_map, campaigns,

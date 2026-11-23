@@ -2,7 +2,7 @@
  * Shared types of the fusion stage (Layer 1 `evidence` -> Layer 2 `experience`).
  *
  * The Layer 2 shapes mirror gub-schemas `prisma/schema.prisma` models
- * Experience and ExperienceEvidenceLink (unpublished 1.23.0, read at the local
+ * Experience and ExperienceEvidenceLink (unpublished 1.26.0, read at the local
  * epic's source tree). Declared here because that version is not pinned yet.
  */
 import type { EvidenceSource, PersonKind, RoleNorm, Seniority, WithheldReason } from './vocab';

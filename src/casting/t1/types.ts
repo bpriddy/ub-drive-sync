@@ -4,7 +4,7 @@
  *
  * The evidence row mirrors the Layer 1 contract in gub-schemas
  * `src/casting.ts` and `prisma/schema.prisma` (model Evidence), source commit
- * f8cf59f on the unpublished gub-schemas epic branch (version 1.23.0). The
+ * f8cf59f on the unpublished gub-schemas epic branch (version 1.26.0). The
  * package is not a dependency of this repo at that version yet, so the shapes
  * are declared here. After the pin moves to a release that carries them, the
  * closed sets and the row type can be imported from the package instead.

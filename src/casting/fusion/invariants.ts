@@ -1,7 +1,7 @@
 /**
  * The row-level constraints of the `experience` table, mirrored (gub-schemas
  * `experienceRowSchema` and the `DB CHECK experience_*` lines, unpublished
- * 1.23.0). A violation is a bug in this stage, never data, so it throws.
+ * 1.26.0). A violation is a bug in this stage, never data, so it throws.
  */
 import type { ExperienceDraft } from './types';
 import { ROLE_NORMS, SENIORITIES, WITHHELD_REASONS } from './vocab';

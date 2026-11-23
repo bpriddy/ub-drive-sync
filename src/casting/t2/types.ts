@@ -5,7 +5,7 @@
  * The evidence row, the closed sets and the writer port are the T1 ones
  * (src/casting/t1/types.ts, mirroring gub-schemas `src/casting.ts` and
  * `prisma/schema.prisma` model Evidence at source commit f8cf59f on the
- * unpublished epic branch, version 1.23.0; the later epic commits up to d8e7042
+ * unpublished epic branch, version 1.26.0; the later epic commits up to d8e7042
  * change no Evidence column or CHECK). They are imported, not copied.
  */
 import type {

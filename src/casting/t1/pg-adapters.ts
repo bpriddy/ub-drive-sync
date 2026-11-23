@@ -9,7 +9,7 @@
  * error (42P01, relation "evidence" does not exist) instead of a late P2022.
  *
  * DEPLOY ORDER (the P2022 trap): the UB migration that creates `evidence`
- * (gub-schemas 1.23.0, migration owner gcp-universal-backend) must be applied to
+ * (gub-schemas 1.26.0, migration owner gcp-universal-backend) must be applied to
  * the environment's database BEFORE this code is deployed or run in apply mode.
  * Dry-run reads only tables that exist today (drive_file_snapshots, campaigns,
  * campaign_pieces, staff) and does not select `created_time`, so it works

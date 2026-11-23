@@ -2,8 +2,8 @@
  * Closed sets and thresholds the fusion stage reads and writes.
  *
  * MIRROR, not a source of truth, for the serving thresholds (the closed sets
- * come from the identity module): they copy gub-schemas `src/casting.ts` (unpublished 1.23.0,
- * read at the local epic's source tree). After 1.23.0 is pinned in package.json,
+ * come from the identity module): they copy gub-schemas `src/casting.ts` (unpublished 1.26.0,
+ * read at the local epic's source tree). After 1.26.0 is pinned in package.json,
  * delete the literals below and re-export the package symbols with the same names.
  * `__tests__/vocab-drift.test.ts` compares these literals with a committed snapshot.
  *

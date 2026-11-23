@@ -1,5 +1,5 @@
 {
-  "$comment": "Snapshot of the gub-schemas casting sets the fusion stage mirrors (unpublished 1.23.0, source commit e305c25). Edit only when the source changes; src/casting/fusion/vocab.ts must follow in the same commit.",
+  "$comment": "Snapshot of the gub-schemas casting sets the fusion stage mirrors (unpublished 1.26.0, source commit e305c25). Edit only when the source changes; src/casting/fusion/vocab.ts must follow in the same commit.",
   "min_confidence": 0.7,
   "min_tiers": 2
 }

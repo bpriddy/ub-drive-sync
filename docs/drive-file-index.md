@@ -261,7 +261,7 @@ account, the `created_time_missing` figure]. After it the latest row has a
 `createdTime` is never selected (it could not be filled in, and would repeat on
 every run).
 
-**Deploy order.** The column arrives with gub-schemas 1.23.0 and the matching
+**Deploy order.** The column arrives with gub-schemas 1.26.0 and the matching
 UB migration. Apply the migration **before** deploying an image built against
 it, for the reason given under `drive_sync_run_id` above: every create on
 `drive_file_snapshots` names the column, and the catch-up's latest-row query

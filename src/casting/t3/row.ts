@@ -1,7 +1,7 @@
 /**
  * Layer 1 `evidence` row, as this stage writes it.
  *
- * MIRROR of gub-schemas `src/casting.ts` (unpublished 1.23.0; row shapes read
+ * MIRROR of gub-schemas `src/casting.ts` (unpublished 1.26.0; row shapes read
  * at source commit d8e7042 of the local gub-schemas epic). Declared here only
  * because that version is not pinned in package.json yet. After the pin:
  * delete `EvidenceRowShape`, `EVIDENCE_QUOTE_MAX_CHARS` and `assertEvidenceInvariants`

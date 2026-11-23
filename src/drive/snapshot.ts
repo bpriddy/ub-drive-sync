@@ -241,7 +241,7 @@ export function snapshotForScanOutcome(
 
 export async function writeSnapshot(input: WriteSnapshotInput): Promise<void> {
   const { file, scope } = input;
-  // DEPLOY ORDER: `created_time` arrives with gub-schemas 1.23.0 and the
+  // DEPLOY ORDER: `created_time` arrives with gub-schemas 1.26.0 and the
   // matching GUB/UB migration. Apply that migration BEFORE deploying an image
   // built against it: the generated client names every column of the model,
   // so without the column this create (all three writers) fails with P2022.

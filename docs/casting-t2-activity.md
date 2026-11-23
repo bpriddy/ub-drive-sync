@@ -53,7 +53,7 @@ Reads `drive_edit_stats` month by month and emits Layer 1 `evidence` rows with
 ## Deploy order (the P2022 trap)
 
 Dry-run reads only tables that exist today. `--apply` needs the UB migration that
-creates `evidence` (gub-schemas 1.23.0): before it, apply fails with Postgres
+creates `evidence` (gub-schemas 1.26.0): before it, apply fails with Postgres
 42P01 on purpose. Apply the migration to the environment, then run.
 
 ## Ops step, separate from this stage: Activity edit-stats backfill
