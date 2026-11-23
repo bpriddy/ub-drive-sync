@@ -108,6 +108,46 @@ const EXTENDED: Row[] = [
   ['Buisness Director', 'account_director', 'director'],
   ['Buiness Director', 'account_director', 'director'],
   ['Bus. Director', 'account_director', 'director'],
+  // Business affairs, including the misspellings and abbreviations the normaliser repairs.
+  ['Business Affairs', 'business_affairs', null],
+  ['Business Affairs Manager', 'business_affairs', null],
+  ['Sr. Business Affairs Manager', 'business_affairs', 'senior'],
+  ['Senior Business Affairs Manager', 'business_affairs', 'senior'],
+  ['Head of Business Affairs', 'business_affairs', 'director'],
+  ['Head of BA', 'business_affairs', 'director'],
+  ['Director of Business Affairs', 'business_affairs', 'director'],
+  ['Talent Manager Business Affairs', 'business_affairs', null],
+  ['Buiness Affiars Manager', 'business_affairs', null],
+  ['Bussiness Afairs', 'business_affairs', null],
+  ['Agency Bus. Affairs', 'business_affairs', null],
+  // Executive leadership: always seniority executive, whatever the title carries.
+  ['CEO', 'executive_leadership', 'executive'],
+  ['CEO, Springfield', 'executive_leadership', 'executive'],
+  ['Chief Executive Officer', 'executive_leadership', 'executive'],
+  ['Managing Partner', 'executive_leadership', 'executive'],
+  ['Founding Partner', 'executive_leadership', 'executive'],
+  ['Partner', 'executive_leadership', 'executive'],
+  ['Managing Director', 'executive_leadership', 'executive'],
+  ['Owner', 'executive_leadership', 'executive'],
+  ['President', 'executive_leadership', 'executive'],
+  // Operations.
+  ['Business Operations Director', 'operations', 'director'],
+  ['Business Operations Manager', 'operations', null],
+  ['Sr. Business Operations Manager', 'operations', 'senior'],
+  ['Head of Operations', 'operations', 'director'],
+  ['Operations Lead', 'operations', 'lead'],
+  // The functional segment wins over a leadership seat, in one segment or across commas.
+  ['Managing Partner Operations Lead', 'operations', 'executive'],
+  ['Managing Partner, Springfield, Account Lead', 'account_director', 'executive'],
+  ['Managing Director & Producer', 'producer', 'executive'],
+  // Music and audio.
+  ['Music', 'music_audio', null],
+  ['Music Production', 'music_audio', null],
+  ['Senior Music Production', 'music_audio', 'senior'],
+  ['Music Director', 'music_audio', 'director'],
+  ['Director of Music', 'music_audio', 'director'],
+  ['Director of Music Production', 'music_audio', 'director'],
+  ['Music Production Director', 'music_audio', 'director'],
 ];
 
 describe('normalizeRole: extended titles', () => {
@@ -115,29 +155,54 @@ describe('normalizeRole: extended titles', () => {
     expect(normalizeRole(raw)).toEqual({ roleNorm: role, seniority, reason: 'mapped' });
   });
 
-  it('CEO and CCO are executive markers', () => {
-    expect(normalizeRole('CEO')).toMatchObject({ roleNorm: 'other', seniority: 'executive' });
-    expect(normalizeRole('CCO').seniority).toBe('executive');
+  it('CCO is an executive marker and still an executive creative director', () => {
+    expect(normalizeRole('CCO')).toMatchObject({
+      roleNorm: 'executive_creative_director',
+      seniority: 'executive',
+    });
+    expect(normalizeRole('Chief Creative Officer, Partner')).toMatchObject({
+      roleNorm: 'executive_creative_director',
+      seniority: 'executive',
+    });
   });
 
-  it('titles that need a vocabulary value nobody has approved stay `other`', () => {
+  it('titles with no approved vocabulary value stay `other`', () => {
     for (const raw of [
-      'Business Affairs',
-      'Senior Business Affairs Manager',
-      'Head of Business Affairs',
-      'Buiness Affiars Manager',
-      'Business Operations Director',
-      'Head of Operations',
-      'Managing Partner',
-      'Founding Partner',
-      'Director of Music',
-      'Music Director',
-      'Director of Music Production',
-      'Music Production',
       'Talent Manager',
+      'Business Lead',
+      'Creative',
+      'Account',
+      'Operations',
+      'Client Partner',
+      'Product Owner',
+      'Vice President',
+      'Senior Vice President, Strategy',
     ]) {
       expect(normalizeRole(raw)).toMatchObject({ roleNorm: 'other', reason: 'unmapped' });
     }
+  });
+
+  it('a leadership seat never beats a CCO in the same title', () => {
+    for (const raw of [
+      'Partner & Global CCO',
+      'Managing Partner & Chief Creative Officer',
+      'CCO, CEO',
+    ]) {
+      expect(normalizeRole(raw)).toMatchObject({
+        roleNorm: 'executive_creative_director',
+        seniority: 'executive',
+        reason: 'mapped',
+      });
+    }
+  });
+
+  it('Finance stays finance and Business Manager is not business affairs', () => {
+    expect(normalizeRole('Finance').roleNorm).toBe('finance');
+    expect(normalizeRole('Business Manager').roleNorm).toBe('finance');
+    expect(normalizeRole('Business Affairs & Finance Manager')).toMatchObject({
+      roleNorm: 'other',
+      reason: 'multi_role',
+    });
   });
 
   it('a bare Account is too vague to place and stays `other`', () => {
@@ -146,13 +211,17 @@ describe('normalizeRole: extended titles', () => {
 
   it('Production in a longer title does not become a producer', () => {
     expect(normalizeRole('Production Designer').roleNorm).toBe('designer');
-    expect(normalizeRole('Music Production').roleNorm).toBe('other');
+    expect(normalizeRole('Production Designer').roleNorm).not.toBe('music_audio');
+    expect(normalizeRole('Music Production').roleNorm).not.toBe('producer');
+    expect(normalizeRole('Production')).toMatchObject({ roleNorm: 'producer' });
+    expect(normalizeRole('Music Production').roleNorm).toBe('music_audio');
+    expect(normalizeRole('Music Production Director').roleNorm).toBe('music_audio');
     expect(normalizeRole('Production Company Liaison').roleNorm).toBe('other');
   });
 
   it('a business title that is not Business Director is not an account title', () => {
     expect(normalizeRole('Business Lead').roleNorm).toBe('other');
-    expect(normalizeRole('Business Operations Manager').roleNorm).toBe('other');
+    expect(normalizeRole('Business Operations Manager').roleNorm).toBe('operations');
   });
 
   it('a title naming a mapped and an unmapped role keeps the mapped one', () => {
@@ -184,7 +253,7 @@ describe('normalizeRole: mapped titles', () => {
   });
 
   it('the examples reach every role_norm value except `other`', () => {
-    const reached = new Set(MAPPED.map(([, role]) => role));
+    const reached = new Set([...MAPPED, ...EXTENDED].map(([, role]) => role));
     for (const role of ROLE_NORMS) if (role !== 'other') expect(reached.has(role)).toBe(true);
   });
 
@@ -227,7 +296,7 @@ describe('normalizeRole: seniority markers', () => {
 
   it('Managing Director and Partner are executive', () => {
     expect(normalizeRole('Managing Director')).toMatchObject({
-      roleNorm: 'other',
+      roleNorm: 'executive_leadership',
       seniority: 'executive',
     });
     expect(normalizeRole('Partner, Strategy').seniority).toBe('executive');
