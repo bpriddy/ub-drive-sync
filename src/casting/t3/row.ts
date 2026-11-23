@@ -27,6 +27,18 @@ import {
 
 export const EVIDENCE_QUOTE_MAX_CHARS = 300;
 
+/** C0 control characters and DEL, NUL included: Postgres text rejects 0x00 (22021). */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+
+/** Replace control characters with a space and collapse whitespace; null stays null. */
+export function cleanText(s: string): string;
+export function cleanText(s: string | null): string | null;
+export function cleanText(s: string | null): string | null {
+  if (s === null) return null;
+  return s.replace(CONTROL_CHARS, ' ').replace(/\s+/g, ' ').trim();
+}
+
 /** What the stage computes. The DB assigns `id` and `created_at`; the sink adds `sync_run_id`. */
 export interface EvidenceRowShape {
   staff_id: string | null;
