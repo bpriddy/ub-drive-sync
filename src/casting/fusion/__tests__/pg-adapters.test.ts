@@ -44,6 +44,8 @@ const dbRow = (over: Record<string, unknown> = {}) => ({
   confidence: 0.9,
   withheldReason: null,
   extractorVersion: 't3-v1',
+  syncRunId: uid(5, 1),
+  loadedAt: '2026-10-01T08:00:00.000000Z',
   ...over,
 });
 
@@ -53,16 +55,26 @@ describe('PgEvidenceReader', () => {
     const out = await new PgEvidenceReader(db).readPage(ACCOUNT, null, 500);
     expect(out).toHaveLength(1);
     const sql = calls[0]!;
-    expect(sql.sql).toMatch(/FROM evidence/);
-    expect(sql.sql).toMatch(/ORDER BY id/);
+    expect(sql.sql).toMatch(/FROM evidence e/);
+    expect(sql.sql).toMatch(/JOIN sync_runs s ON s\.id = e\.sync_run_id/);
+    expect(sql.sql).toMatch(/ORDER BY e\.id/);
     expect(sql.sql).toMatch(/LIMIT/);
     expect(sql.sql).not.toMatch(/raw_name/);
     // The quote and the raw role are read only as presence flags, never as text.
     const withoutFlags = sql.sql
-      .replace(/\(quote IS NOT NULL\)/, '')
-      .replace(/\(role_raw IS NOT NULL\)/, '');
+      .replace(/\(e\.quote IS NOT NULL\)/, '')
+      .replace(/\(e\.role_raw IS NOT NULL\)/, '');
     expect(withoutFlags).not.toMatch(/quote|role_raw/);
     expect(sql.values).toEqual([ACCOUNT, '00000000-0000-0000-0000-000000000000', 500]);
+  });
+
+  it('carries the load run and its start, for the newest-load rule', async () => {
+    const { db, calls } = fakeDb([
+      [dbRow({ syncRunId: uid(5, 2), loadedAt: '2026-11-01T08:00:00.000000Z' })],
+    ]);
+    const [row] = await new PgEvidenceReader(db).readPage(ACCOUNT, null, 10);
+    expect(row).toMatchObject({ syncRunId: uid(5, 2), loadedAt: '2026-11-01T08:00:00.000000Z' });
+    expect(calls[0]!.sql).toMatch(/s\.started_at AT TIME ZONE 'UTC'/);
   });
 
   it('passes the cursor on later pages', async () => {

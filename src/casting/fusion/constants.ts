@@ -12,7 +12,7 @@ import type { RoleNorm } from './vocab';
 import { CASTING_MIN_CONFIDENCE, CASTING_MIN_TIERS } from './vocab';
 import type { EvidenceSource } from './vocab';
 
-export const FUSION_VERSION = 'fusion-v2';
+export const FUSION_VERSION = 'fusion-v3';
 /** `sync_runs.source` of an apply run. [VERIFY: no CHECK on sync_runs.source; the D3 record needs a line for it.] */
 export const FUSION_SYNC_SOURCE = 'casting_fusion';
 

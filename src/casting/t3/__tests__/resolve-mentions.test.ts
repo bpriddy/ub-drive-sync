@@ -37,6 +37,7 @@ const run = (
       index,
       context,
       extractorVersion: 'v',
+      contentVersion: 'cell-1',
       now: NOW,
     },
     counts,
@@ -136,6 +137,7 @@ describe('mentionsToDrafts', () => {
         mentions: [m({ rawName: 'Yuriy Kovalenko', rawRole: 'Producer', periodText: '2027' })],
         index,
         extractorVersion: 'v',
+        contentVersion: 'cell-1',
         now: NOW,
       },
       counts,
@@ -168,6 +170,7 @@ describe('mentionsToDrafts', () => {
           mentions: [m({ rawName: 'Alexander Voronin', rawRole: 'Producer', periodText: text })],
           index,
           extractorVersion: 'v',
+          contentVersion: 'cell-1',
           now: new Date(iso),
         },
         counts,
@@ -183,5 +186,27 @@ describe('mentionsToDrafts', () => {
     expect(f1?.period_start).toBeNull();
     expect(f2?.period_start).toBe('2027-01-01');
     expect(f1?.claim_hash).toBe(f2?.claim_hash);
+  });
+
+  it('claim_hash carries the content version: same claim, same version = same hash; new version = new hash', () => {
+    const at = (contentVersion: string) => {
+      const counts = newResolveCounts();
+      return mentionsToDrafts(
+        {
+          candidate: doc,
+          docType: 'x',
+          mentions: [m({ rawName: 'Alexander Voronin', rawRole: 'Producer', location: 'slide 2' })],
+          index,
+          extractorVersion: 'v',
+          contentVersion,
+          now: NOW,
+        },
+        counts,
+      )[0]?.row;
+    };
+    expect(at('cell-1')?.claim_hash).toBe(at('cell-1')?.claim_hash);
+    expect(at('cell-1')?.claim_hash).not.toBe(at('cell-2')?.claim_hash);
+    // Nothing else about the row moves with it.
+    expect({ ...at('cell-1'), claim_hash: '' }).toEqual({ ...at('cell-2'), claim_hash: '' });
   });
 });

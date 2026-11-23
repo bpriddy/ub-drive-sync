@@ -1,5 +1,6 @@
 /**
- * The confidence formula (fusion-v2). Pure arithmetic over a claim's evidence.
+ * The confidence formula (unchanged since fusion-v2; fusion-v3 changed which rows reach it,
+ * see newest-load.ts). Pure arithmetic over a claim's evidence.
  *
  * For one claim (person x project x role), over its usable evidence rows:
  *

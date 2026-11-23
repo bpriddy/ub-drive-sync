@@ -61,7 +61,7 @@ describe('a served claim', () => {
       periodEnd: '2023-06-30',
       confidence: 0.877, // T3 capped at 0.8 (quote, role): 1 - 0.2 * 0.7 * 0.88
       withheldReason: null,
-      fusionVersion: 'fusion-v2',
+      fusionVersion: 'fusion-v3',
     });
     expect(c.tiers).toEqual(['T1', 'T2', 'T3']);
     expect(c.evidenceIds).toEqual(rows.map((r) => r.id).sort());

@@ -82,7 +82,7 @@ function sinks() {
   const runs: FusionRunStore = {
     async open(details) {
       calls.push('open');
-      expect(details).toMatchObject({ stage: 'casting_fusion', fusion_version: 'fusion-v2' });
+      expect(details).toMatchObject({ stage: 'casting_fusion', fusion_version: 'fusion-v3' });
       return 'b0000000-0000-4000-8000-000000000002';
     },
     async finish(_id, status, counts, summary) {
@@ -122,7 +122,7 @@ describe('runFusion', () => {
     );
     expect(report).toMatchObject({
       mode: 'dry-run',
-      fusionVersion: 'fusion-v2',
+      fusionVersion: 'fusion-v3',
       today: TODAY,
       runId: null,
       status: 'success',
@@ -159,7 +159,7 @@ describe('runFusion', () => {
       'finish:success',
     ]);
     expect(
-      s.written.every((w) => w.fusionVersion === 'fusion-v2' && w.syncRunId === report.runId),
+      s.written.every((w) => w.fusionVersion === 'fusion-v3' && w.syncRunId === report.runId),
     ).toBe(true);
     expect(s.finished[0]?.counts).toMatchObject({
       evidenceRows: 3,

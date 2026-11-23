@@ -21,6 +21,12 @@ export const ACCOUNT = uid(1, 1);
 export const OTHER_ACCOUNT = uid(1, 2);
 export const TODAY = '2026-11-19';
 
+/** Two load runs, the second one later: the default of `ev` is the first. */
+export const RUN_1 = uid(5, 1);
+export const RUN_2 = uid(5, 2);
+export const LOADED_1 = '2026-10-01T08:00:00.000000Z';
+export const LOADED_2 = '2026-11-01T08:00:00.000000Z';
+
 let counter = 0;
 /** Resets the evidence id counter; call in beforeEach where ids matter. */
 export const resetIds = (): void => {
@@ -49,6 +55,8 @@ export function ev(p: Partial<FusionEvidence> & Pick<FusionEvidence, 'source'>):
     withheldReason: null,
     extractorVersion:
       p.source === 'drive_content' ? 't3-v1' : p.source === 'drive_activity' ? 't2-v1' : 't1-v1',
+    syncRunId: RUN_1,
+    loadedAt: LOADED_1,
     ...p,
   };
 }
@@ -228,6 +236,8 @@ export function generateInput(seed: number, opts: GeneratorOptions = {}): Fusion
       hasRole: true,
       withheldReason: null,
       extractorVersion: 'v1',
+      syncRunId: RUN_1,
+      loadedAt: LOADED_1,
       ...r,
     });
   };

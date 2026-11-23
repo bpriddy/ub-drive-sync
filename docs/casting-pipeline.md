@@ -180,6 +180,11 @@ guard of section 4 stays.
   call; the loader writes rows for the copy's own file, account and project. The paid cell is carried into the
   new ledger without usage so the loader finds it next to its copies. Files with no md5 that duplicate a paid
   text are still caught at read time (the stage's content-hash copy), at the cost of one Drive read.
+- An edited file leaves its old rows in Layer 1; fusion counts only the file's newest load
+  (`docs/casting-fusion.md`, "Newest content version of a file"). For that, the T3 `claim_hash` holds the
+  ledger cell key (the content version): the load of an edited file writes ALL its claims as new rows, and
+  loading the same ledger again still inserts nothing. A ledger with several ok cells of one file loads
+  only the newest. Load ledgers in date order.
 - `--sample-size` and `--sample-seed` become optional (the sample is the whole delta, capped by `--max-cells`);
   `--expect-cells` may be 0. Plan first: it prints the delta. Apply with `--expect-cells N --max-cells N`.
 - Paid-twice by cell: a daily ledger has yesterday's configuration by design, so the detector runs with the

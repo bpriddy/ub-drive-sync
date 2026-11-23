@@ -36,6 +36,10 @@ export interface FusionEvidence {
   hasRole: boolean;
   withheldReason: WithheldReason | null;
   extractorVersion: string;
+  /** `sync_runs.id` of the load run that wrote the row. */
+  syncRunId: string;
+  /** Start of that run (`sync_runs.started_at`, ISO-8601 UTC, fixed width so text order is time order). */
+  loadedAt: string;
 }
 
 /** An account the catalog knows. Fusion needs only that it exists. */
@@ -132,6 +136,8 @@ export interface FusionMetrics {
   duplicateIds: number;
   /** Rows dropped because a newer extractor_version covers the same (source, file). */
   superseded: number;
+  /** T3 rows dropped because a newer load of the same file exists (an older content version). */
+  olderContentVersion: number;
   /** Staff rows that never became a claim, by reason. */
   staffRowsDropped: { notCurrent: number; unknownStaff: number; withheldStaffRow: number };
   byTier: Record<Tier, TierMetrics>;
