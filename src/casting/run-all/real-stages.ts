@@ -17,7 +17,11 @@ export function realStages(): StageFns {
     fusion: async (argv) => (await import('../fusion/main')).main(argv),
     t3: async (argv, hooks) => {
       const { realIo, runPilotCli } = await import('../t3/pilot-main');
-      return runPilotCli(argv, { ...realIo(), beforeApply: hooks.beforeApply });
+      return runPilotCli(argv, {
+        ...realIo(),
+        beforeApply: hooks.beforeApply,
+        ...(hooks.onProposal ? { onProposal: hooks.onProposal } : {}),
+      });
     },
     load: async (argv) => {
       const { realLoadIo, runLoadCli } = await import('../t3/load-main');

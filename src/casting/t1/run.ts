@@ -186,6 +186,8 @@ export async function runT1(deps: T1Deps, options: T1Options): Promise<T1Report>
         extractor_version: T1_EXTRACTOR_VERSION,
         window_start: options.windowStart,
         accounts: options.accountIds.length,
+        // Read by the incremental change probe (maintain/change-probe.ts): ids only, no names.
+        account_ids: [...options.accountIds],
       });
     }
   }

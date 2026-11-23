@@ -449,6 +449,8 @@ export async function runT3(
         accountId: s.candidate.accountId,
         createdTime: s.candidate.createdTime,
         projectRef: s.candidate.projectRef,
+        // Additive: lets a later incremental run see that identical content was already paid.
+        ...(s.candidate.md5Checksum ? { md5Checksum: s.candidate.md5Checksum } : {}),
       },
       docClass: s.docClass,
       contentHash: null,

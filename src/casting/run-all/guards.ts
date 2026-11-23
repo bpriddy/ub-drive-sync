@@ -58,12 +58,14 @@ const SAME_FIELDS = [
   'capChars',
 ] as const;
 
-function hasOkCell(file: string): boolean {
+/** True when the file has an ok cell; with `keys`, an ok cell whose key is in the set. */
+function hasOkCell(file: string, keys?: ReadonlySet<string>): boolean {
   if (!fs.existsSync(file)) return false;
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     if (line.trim() === '') continue;
     try {
-      if ((JSON.parse(line) as { status?: string }).status === 'ok') return true;
+      const rec = JSON.parse(line) as { status?: string; cellKey?: string };
+      if (rec.status === 'ok' && (keys === undefined || keys.has(rec.cellKey ?? ''))) return true;
     } catch {
       // a torn line is not a paid cell
     }
@@ -76,8 +78,15 @@ function hasOkCell(file: string): boolean {
  * files (the loader dedupes only afterwards). Returns the name of the first sibling directory
  * whose header has the same account, window start, prompt version, model, thinking level and cap
  * AND at least one ok cell; null when none. The directory itself (a resume) is not a sibling.
+ *
+ * `overlapWith` (incremental runs): only a sibling with an ok cell whose key is in the set is a
+ * twin; the signature fields are not compared (the cell key already covers them).
  */
-export function findPaidTwice(dir: string, pilot: PilotArgs): string | null {
+export function findPaidTwice(
+  dir: string,
+  pilot: PilotArgs,
+  options: { readonly overlapWith?: ReadonlySet<string> } = {},
+): string | null {
   const resolved = path.resolve(dir);
   const parent = path.dirname(resolved);
   if (!fs.existsSync(parent)) return null;
@@ -96,6 +105,18 @@ export function findPaidTwice(dir: string, pilot: PilotArgs): string | null {
     }
     const sig = header.signature;
     if (!sig) continue;
+    if (options.overlapWith !== undefined) {
+      // Incremental run (S9): each day's ledger holds different cells by design, so a matching
+      // configuration is not a twin. A twin is a sibling that already paid one of THESE cells
+      // (the cell key carries file, content version, prompt, model, thinking and cap).
+      if (
+        String(sig['accountId']).toLowerCase() === String(mine['accountId']).toLowerCase() &&
+        hasOkCell(path.join(other, 'cells.jsonl'), options.overlapWith)
+      ) {
+        return name;
+      }
+      continue;
+    }
     if (
       SAME_FIELDS.every((k) => sig[k] === mine[k]) &&
       hasOkCell(path.join(other, 'cells.jsonl'))

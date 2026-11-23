@@ -38,7 +38,10 @@ export interface CellRecord {
   readonly status: 'ok' | 'failed' | 'skipped' | 'copy';
   /** Why failed, skipped or recorded as a copy. */
   readonly reason: string | null;
-  readonly candidate: Pick<T3Candidate, 'fileId' | 'accountId' | 'createdTime' | 'projectRef'>;
+  readonly candidate: Pick<
+    T3Candidate,
+    'fileId' | 'accountId' | 'createdTime' | 'projectRef' | 'md5Checksum'
+  >;
   readonly docClass: DocClass;
   readonly contentHash: string | null;
   readonly docType: string | null;

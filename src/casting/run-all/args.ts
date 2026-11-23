@@ -4,7 +4,15 @@
  * "plan only", and a mistyped `--max-cell` must not mean "no limit".
  *
  *   --account-id UUID        exactly one account per invocation
- *   --window-start DATE      required; the same value goes to t1, t2 and t3
+ *   --window-start DATE      the same value goes to t1, t2 and t3. Exactly one of --window-start and
+ *                            (with --incremental) --window-years N: the sliding window, N years back
+ *                            from today; the resolved date is what every stage gets and what the
+ *                            run report records
+ *   --incremental            S9: only what is new or changed. t3 pays only for cells no earlier ledger
+ *                            (a sibling of --ledger-dir) holds; with --apply a day with no change in the
+ *                            file index skips the free stages and writes nothing. Needs --ledger-dir
+ *                            when t3 is in --stages; --sample-size and --sample-seed become optional;
+ *                            --expect-cells may be 0. Every paid-run guard stays
  *   --stages LIST            subset of t1,t2,t3,load,fusion (default all; the order is fixed)
  *   --apply                  free DB writes: t1, t2, load, fusion
  *   --apply-t3               the PAID model stage; needs every flag below it
@@ -28,6 +36,9 @@ export type StageName = (typeof STAGE_ORDER)[number];
 export interface CastingArgs {
   readonly accountId: string;
   readonly windowStart: string;
+  /** Set when the window start was computed from `--window-years`. */
+  readonly windowYears: number | null;
+  readonly incremental: boolean;
   readonly stages: readonly StageName[];
   readonly apply: boolean;
   readonly applyT3: boolean;
@@ -55,6 +66,7 @@ export interface CastingArgs {
 const VALUE_FLAGS: ReadonlySet<string> = new Set([
   '--account-id',
   '--window-start',
+  '--window-years',
   '--stages',
   '--sample-size',
   '--sample-seed',
@@ -77,6 +89,7 @@ const BOOL_FLAGS: ReadonlySet<string> = new Set([
   '--apply',
   '--apply-t3',
   '--allow-repeat-paid',
+  '--incremental',
   '--read-text',
   '--retry-failed',
 ]);
@@ -120,7 +133,15 @@ function parseResume(v: string): { t1?: string; t2?: string } {
   return out;
 }
 
-export function parseCastingArgs(argv: readonly string[]): CastingArgs {
+/** `years` calendar years before `today` (UTC), YYYY-MM-DD. The sliding window start. */
+export function windowStartFromYears(today: Date, years: number): string {
+  const d = new Date(
+    Date.UTC(today.getUTCFullYear() - years, today.getUTCMonth(), today.getUTCDate()),
+  );
+  return d.toISOString().slice(0, 10);
+}
+
+export function parseCastingArgs(argv: readonly string[], now: Date = new Date()): CastingArgs {
   const single = new Map<string, string>();
   const many = new Map<string, string[]>();
   const bools = new Set<string>();
@@ -151,9 +172,24 @@ export function parseCastingArgs(argv: readonly string[]): CastingArgs {
   if (accountId === undefined || !UUID.test(accountId)) {
     throw new Error('--account-id UUID is required (exactly one account per run)');
   }
-  const windowStart = single.get('--window-start');
-  if (windowStart === undefined || !isIsoDate(windowStart)) {
-    throw new Error('--window-start YYYY-MM-DD is required');
+  const incremental = bools.has('--incremental');
+  const explicitStart = single.get('--window-start');
+  let windowStart: string;
+  let windowYears: number | null = null;
+  if (single.has('--window-years')) {
+    if (explicitStart !== undefined)
+      throw new Error('give --window-start or --window-years, not both');
+    if (!incremental) throw new Error('--window-years needs --incremental');
+    windowYears = positiveInt('--window-years', single.get('--window-years') as string);
+    if (windowYears > 20) throw new Error('--window-years must be at most 20');
+    windowStart = windowStartFromYears(now, windowYears);
+  } else {
+    if (explicitStart === undefined || !isIsoDate(explicitStart)) {
+      throw new Error(
+        '--window-start YYYY-MM-DD is required (or --window-years N with --incremental)',
+      );
+    }
+    windowStart = explicitStart;
   }
   const stages = single.has('--stages')
     ? parseStages(single.get('--stages') as string)
@@ -170,7 +206,9 @@ export function parseCastingArgs(argv: readonly string[]): CastingArgs {
   const sampleSeed = single.get('--sample-seed') ?? null;
   if (sampleSeed !== null && sampleSeed.trim() === '') throw new Error('--sample-seed is empty');
   const maxCells = int('--max-cells');
-  const expectCells = int('--expect-cells');
+  // An incremental run may find nothing to pay: then the approved cell count is 0.
+  const expectCells =
+    incremental && single.get('--expect-cells') === '0' ? 0 : int('--expect-cells');
   let maxUsd: number | null = null;
   if (has('--max-usd')) {
     maxUsd = Number(single.get('--max-usd'));
@@ -183,11 +221,20 @@ export function parseCastingArgs(argv: readonly string[]): CastingArgs {
   }
 
   const hasT3 = stages.includes('t3');
+  if (incremental && hasT3 && ledgerDir === null) {
+    throw new Error(
+      '--incremental with t3 needs --ledger-dir (the earlier ledgers are its sibling directories)',
+    );
+  }
   if (applyT3) {
     if (!hasT3) throw new Error('--apply-t3 needs t3 in --stages');
     const missing = [
-      ['--sample-size', sampleSize],
-      ['--sample-seed', sampleSeed],
+      ...(incremental
+        ? []
+        : [
+            ['--sample-size', sampleSize],
+            ['--sample-seed', sampleSeed],
+          ]),
       ['--max-cells', maxCells],
       ['--max-usd', maxUsd],
       ['--ledger-dir', ledgerDir],
@@ -204,7 +251,7 @@ export function parseCastingArgs(argv: readonly string[]): CastingArgs {
     }
     if (bools.has('--allow-repeat-paid')) throw new Error('--allow-repeat-paid needs --apply-t3');
   }
-  if (hasT3 && (sampleSize === null || sampleSeed === null)) {
+  if (hasT3 && !incremental && (sampleSize === null || sampleSeed === null)) {
     // The PLAN prints a PROPOSAL for a named sample; a silent default would hide the pool.
     throw new Error('t3 is in --stages: --sample-size and --sample-seed are required');
   }
@@ -213,7 +260,7 @@ export function parseCastingArgs(argv: readonly string[]): CastingArgs {
       if (has(k)) throw new Error(`${k} only means something with t3 in --stages`);
     }
   }
-  if (apply && stages.includes('load') && ledgerDir === null) {
+  if (apply && !incremental && stages.includes('load') && ledgerDir === null) {
     throw new Error(
       '--apply with the load stage needs --ledger-dir (or leave load out of --stages)',
     );
@@ -236,6 +283,8 @@ export function parseCastingArgs(argv: readonly string[]): CastingArgs {
   return {
     accountId: accountId.toLowerCase(),
     windowStart,
+    windowYears,
+    incremental,
     stages,
     apply,
     applyT3,

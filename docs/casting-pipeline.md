@@ -28,6 +28,7 @@ casting-run --account-id UUID --window-start YYYY-MM-DD --sample-size N --sample
             [--model M --thinking L --variant V --parallel 1|2 --read-text --retry-failed]
             [--agency-domain D ...] [--unknown-start-date YYYY-MM-DD ...] [--known-prefix P ...]
             [--budget-seconds N] [--chunk-size N] [--resume t1=<run-id>,t2=<run-id>]
+            [--incremental] [--window-years N]         S9, see section 7
 ```
 
 | Flags                 | What happens                                                                                                                                                                          | Exit |
@@ -86,6 +87,12 @@ Changed in existing files: `t1/main.ts`, `t2/main.ts`, `fusion/main.ts` (`main` 
 driver's guards, before the header, the model client and the sink; absent = unchanged); `t3/real-llm.ts`
 (throws if the client module selected the mock driver); `package.json` (`casting-run` script).
 
+S9 additions (section 7): `src/casting/maintain/` (incremental selection, prior ledgers, re-scan plan, drift, purge,
+change probe, job); in existing files `t3/pilot.ts` and `t3/pilot-args.ts` (`--incremental`, `onProposal` hook,
+`cellKeys` in `BeforeApplyInfo`), `t3/ledger.ts` and `t3/run.ts` (optional `md5Checksum` on a ledger record),
+`t3/load.ts` (`window_start` on the run), `t1/run.ts` (`account_ids` on the run), `run-all/*` (flags, probe gate,
+by-cell paid-twice), `package.json` (four scripts).
+
 Out of the chain on purpose: the T2 edit-stats backfill (it writes `drive_edit_stats`, separate go) and the
 UB serving endpoint.
 
@@ -110,7 +117,8 @@ Paid stage:
    Keep the manual check `ps -eo pid,args | grep "[c]asting-run"` in the runbook.
 6. Paid-twice: a sibling directory of `--ledger-dir` whose header has the same account, window start,
    prompt version, model, thinking level and cap, and at least one ok cell, refuses the run unless
-   `--allow-repeat-paid`. The directory itself (a resume) is not a twin.
+   `--allow-repeat-paid`. The directory itself (a resume) is not a twin. With `--incremental` the same
+   detector runs by cell (section 7).
 7. Halt on exit 4.
 
 All stages: dry-run default, explicit `--apply`, one account, unknown flag = error, argv validated up front.
@@ -118,35 +126,25 @@ Fusion pin: `fusion --apply` replaces the account's Layer 2 rows, so serving is 
 `CASTING_FUSION_VERSION` is switched (`docs/casting-fusion.md`); the plan line warns when the env pin differs
 from the code's version.
 
-Deferred, NOT built (user ruling): the `CASTING_ENABLED_ACCOUNTS` per-account switch (D14: `log` then
-`strict`, named owner, written cutover plan). It is deferred until the Cloud Run Job form exists; on a
-local run the person holding the credentials is the switch.
+The per-account switch (D14: `log` then `strict`, named owner, written cutover plan) is, for the job,
+`CASTING_JOB_ACCOUNT_IDS` (empty = nothing runs) plus the write flag `CASTING_JOB_APPLY` (default off = plan
+only). On a local run the person holding the credentials is the switch.
 
 ## 5. Where it runs
 
-v1 is local, with cloud-sql-proxy and ADC, for every run including the paid one. Nothing in Cloud Run calls
-the casting mains (`ENTRYPOINT` is `dist/src/main.js`, whose modes have no casting entry).
+Local (cloud-sql-proxy and ADC) for every run including the paid one. The Cloud Run Job form is BUILT
+(`src/casting/maintain/job-main.ts`, section 7) but NOT deployed, scheduled or enabled: nothing in
+`.github/workflows/deploy.yml`, terraform or Cloud Scheduler references it.
 
-Future work, not started (user ruling: not now):
-
-- Cloud Run Job form, free stages first. D12 pattern A (Cloud Run Job, no HTTP), same image; a separate job
-  (for example `gub-drive-sync-casting-<env>`) with its own runtime SA, no Scheduler trigger and a narrow
-  `run.developer` binding, because the existing job can be fired with arbitrary args by the admin app's SA.
 - Observed in `.github/workflows/deploy.yml` (the live job was not read): the dev FLAGS set `GCP_PROJECT_ID`
   but no `GEMINI_*` variable and no Gemini secret, so as written a deployed client would be the mock. That
   is why the model preflight exists.
 - The paid stage in Cloud Run needs a Vertex role on that SA, `GEMINI_USE_ENTERPRISE=true` and a persistent
   ledger (GCS volume or GCS-backed). The ledger holds names and short quotes from client documents: where it
   lives is a data-handling decision.
-- Records: D3 needs none (writes go only through the existing `casting_t1/t2/t3/fusion` sync_runs). D12
-  needs none (same pattern). D14 needs an entry with the account switch above.
-- Unattended T3 is NOT approved and not built. If ever: a dedicated job, caps from reviewed `deploy.yml`
-  config (budget per run plus an approval expiry date), delta files only, a hard stop at `--max-usd`, ships
-  in `log` then `strict` with an owner and a cutover plan (D14).
-- S9 gap: the T3 ledger is per directory and its header fixes the sample, so a new ledger over a quiet
-  account pays again for unchanged files. A cross-ledger done-set (`--skip-ledger-dir`, read-only prior
-  ledgers) is planned AFTER the first full wave, not in this branch. Until then the paid-twice guard stops an
-  accidental repeat.
+- Records: D3 needs none for the stages (writes go through `casting_t1/t2/t3/fusion` sync_runs); the purge
+  adds the source `casting_purge` and needs a D3 line. D12: pattern A, same image, no record. D14 needs the
+  flag entry (owner, cutover plan) before the job is enabled.
 
 ## 6. Tests (unit only: fake stages, temp dirs; no DB, no model, no Drive, no network)
 
@@ -158,3 +156,120 @@ every refusal leaves no stage called, lock and audit log placement, counts-only 
 `hermetic.test.ts` (the core imports no config, Prisma, logger, model or Drive code; only `real-stages.ts`
 and `main.ts` have dynamic imports). Also `t3/__tests__/real-llm.test.ts` (mock driver throws) and three
 cases in `t3/__tests__/pilot.test.ts` (the `beforeApply` hook).
+
+`src/casting/maintain/__tests__/`: `incremental.test.ts` and `pilot-incremental.test.ts` (selection, quiet day
+writes nothing, $0 copies, loader round trip), `rescan-plan.test.ts`, `drift.test.ts`, `purge.test.ts`,
+`change-probe.test.ts`, `job.test.ts`, `window.test.ts`, `hermetic.test.ts`; `run-all/__tests__/incremental.test.ts`.
+All fakes: no database, Drive, model or network.
+
+## 7. Maintenance (S9): incremental, re-scan, drift, purge, window, job
+
+Code: `src/casting/maintain/`. Nothing here approves or starts a paid run on its own.
+
+### Incremental
+
+`casting-run --incremental --ledger-dir /abs/<base>/<account>/<day> ...` changes only what is selected; every
+guard of section 4 stays.
+
+- T3 pays only for cells that no earlier ledger holds. A cell key is file + content version (Drive md5; the
+  modified time for Google-native files) + prompt + model + thinking + cap, so an unchanged file is the same
+  key (already paid), an edited file is a new key, and a new extractor version re-keys everything. The earlier
+  ledgers are the SIBLING directories of `--ledger-dir` (same account, read-only, never created). One directory
+  per day; a second run the same day resumes it.
+- A new file whose md5 matches a paid cell, and a new listing copy of a paid cell, are `$0` copy lines: no model
+  call; the loader writes rows for the copy's own file, account and project. The paid cell is carried into the
+  new ledger without usage so the loader finds it next to its copies. Files with no md5 that duplicate a paid
+  text are still caught at read time (the stage's content-hash copy), at the cost of one Drive read.
+- `--sample-size` and `--sample-seed` become optional (the sample is the whole delta, capped by `--max-cells`);
+  `--expect-cells` may be 0. Plan first: it prints the delta. Apply with `--expect-cells N --max-cells N`.
+- Paid-twice by cell: a daily ledger has yesterday's configuration by design, so the detector runs with the
+  cell keys of the PROPOSAL and refuses only when a sibling already paid one of THESE cells.
+- A no-change day selects 0 cells, creates no directory, header, model client or sink: cost `$0`, writes nothing.
+- Free stages with `--apply`: a read-only probe asks whether any file of the account got a snapshot row (other
+  than `delta_unchanged`, `content_unchanged`, `trashed`) after the last successful `casting_t1` run that
+  named the account (T1 now stamps `account_ids` on its run). Quiet: t1, t2 and fusion are skipped (no run
+  rows, no Layer 2 rebuild), exit 0. No baseline (first run) or a probe error counts as changed. T3 is never
+  gated by the probe: its own delta decides. Known gap: a day with edits that are not in the file index (T2
+  activity only) is not picked up until something else changes.
+
+### Re-scan on an `extractor_version` bump
+
+`npm run casting-rescan-plan -- --account-id UUID --window-start D --model M --thinking L --ledger-dir /abs/<new-day>`:
+lists the account, reads the earlier ledgers, prints the cells the target version needs (re-extractions of an
+earlier version vs never extracted, by class), low/base/high cost (cells priced at `[ASSUME 10000]` chars: no
+document is read), exit 3. It has no apply flag (any `--apply*` is refused). The paid run is the ordinary
+`casting-run --incremental --apply-t3` with its own approval. Then load, rebuild Layer 2, switch the
+fusion pin (`docs/casting-fusion.md`), and purge the old version only after the new one is served.
+
+### Drift monitor
+
+`npm run casting-drift -- --account-id UUID [--fusion-version V] [--window-start D] [--compare prev.json] [--fail-on-breach]`:
+SELECT-only aggregates, one JSON line of counts and rates: unresolved-name rate (T3 rows not resolved to one
+staff row, client-side people included), tier agreement (served claims backed by 2+ sources), withheld share,
+served count, confidence spread (p10/p50/p90). The unresolved-name rate and the withheld share depend on the
+account (client-side names, how much is confirmed), so they are judged **only as a change against a baseline
+report** (`--compare`), never against a fixed limit; only tier agreement and confidence spread have absolute
+floors. Save the report's `report` object as the baseline after each full rebuild and pass it back with
+`--compare`. Thresholds are named constants in `maintain/constants.ts`, all `[ASSUME]` placeholders:
+**TODO(S8) S8 must ratify them** before any alert reads them. Exit 0 even on a breach unless `--fail-on-breach`
+(exit 6).
+
+### Purge of a bad extractor version
+
+`npm run casting-purge -- --account-id UUID --extractor-version t3-v1:gemini-3.5-flash:low` is a dry-run:
+counts the rows, tagged by the `sync_runs` rows that wrote them. `--apply --expect-rows N` (N from the dry-run)
+deletes ONE account's rows of ONE version in batches and records a `casting_purge` sync run. Then:
+
+1. rebuild Layer 2 for the account (`casting-run --stages fusion --apply` or `fusion --apply`): links to the
+   deleted rows cascade, so Layer 2 rows show fewer sources until the rebuild;
+2. keep the bad ledger out of any load (the loader would re-insert the rows); a bumped version re-keys the cells
+   so the incremental run does not treat them as done.
+
+### Sliding window
+
+`--window-years N` (needs `--incremental`; the job defaults to 5) resolves the cutoff from today; the run plan
+and summary lines record `windowCutoff`, T1/T2 run details and the ledger header record `window_start`, and the
+loader stamps it on its run. The rule: **a slide moves only what is selected from now on; it never deletes
+evidence and never touches Layer 2.** The cutoff is not part of a cell key, so a slide re-pays nothing. Evidence
+older than the cutoff stays in Layer 1 and keeps backing claims that Layer 2 serves; only the explicit purge
+deletes. `casting-drift --window-start` counts the served claims that ended before a cutoff, so a person can
+see what a future retention rule would touch. No retention deletion is implemented; it needs a defined rule
+and a decision first.
+
+### Cloud Run Job form (built, not deployed)
+
+`node dist/src/casting/maintain/job-main.js` (`npm run casting-job` locally), same image, command overridden by
+the job definition (the image ENTRYPOINT stays `dist/src/main.js`). For each account it runs
+`casting-run --incremental --window-years N --stages t1,t2,load,fusion [--apply]`: free stages only.
+
+| Variable                   | Default | Meaning                                                                        |
+| -------------------------- | ------- | ------------------------------------------------------------------------------ |
+| `CASTING_JOB_ACCOUNT_IDS`  | empty   | uuid list; empty refuses (nothing enabled)                                     |
+| `CASTING_JOB_APPLY`        | off     | `true` = the free stages write; otherwise every stage is a dry-run             |
+| `CASTING_WINDOW_YEARS`     | 5       | sliding window length                                                          |
+| `CASTING_T3_ENABLED`       | off     | paid-stage enable flag                                                         |
+| `CASTING_T3_DAILY_MAX_USD` | unset   | written budget for one execution, split evenly across the accounts             |
+| `CASTING_T3_LEDGER_DIR`    | unset   | absolute persistent base: `<base>/<account>/<day>` (needed when T3 is enabled) |
+
+Owner of `CASTING_JOB_APPLY` and `CASTING_T3_ENABLED`: the casting staffing track. `CASTING_JOB_APPLY` flips once the
+job is deployed and one dry-run execution matches a manual `casting-run --incremental` plan; `CASTING_T3_ENABLED`
+flips only after the user approves a written daily budget. Both flags are deleted once the job has run unattended
+for a month and the budget is a fixed part of the job definition.
+
+The paid stage runs only when `CASTING_T3_ENABLED=true` AND `CASTING_T3_DAILY_MAX_USD` are both set (and writes
+are on and the ledger dir exists); the flag alone refuses the job, the budget alone leaves T3 off. **Setting
+them is the user's approval decision**: a scheduled paid run is not covered by any single-use approval, and the
+budget must be written down and approved before it is set. When on, per account: a read-only PLAN, then one paid
+pass only if the plan has cells and its base estimate fits the account's share; that pass carries the plan's
+cell count as `--expect-cells`/`--max-cells` and the share as `--max-usd`, with every guard of section 4
+(model preflight, lock, paid-twice by cell, ledger outside the repo). The share is a ceiling, not the
+estimate; actual spend per execution is bounded by the budget, not predicted.
+
+To put it in the cloud (NOT done here, each step needs the user's go): add the job to `deploy.yml` as a separate
+job (for example `gub-drive-sync-casting-<env>`, own runtime SA, `--command node --args dist/src/casting/maintain/job-main.js`,
+env above, no Scheduler trigger until the flags below are decided); give the SA read on the accounts database and
+Drive as the existing job has, a Vertex role only if T3 will ever be enabled, and a persistent ledger volume
+(GCS) only then; a narrow `run.developer` binding (the existing job can be fired with arbitrary args by the admin
+app's SA); then, last, a Cloud Scheduler trigger. Record in the decisions file: the D14 flags
+(`CASTING_JOB_APPLY`, `CASTING_T3_ENABLED`: `log` = plan-only, then `strict`; owner; flip signal; when each is
+deleted) and a D3 line for the `casting_purge` source.

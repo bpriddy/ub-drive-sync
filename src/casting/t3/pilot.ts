@@ -24,6 +24,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { LlmDriver } from '../../ai/ai.types';
 import type { RosterIndex } from '../identity';
+import { planIncremental, type IncrementalPlan } from '../maintain/incremental';
+import { ChainedLedger, readPriorLedgers, type PriorLedgers } from '../maintain/prior-ledgers';
 import type { PilotArgs } from './pilot-args';
 import {
   estimate,
@@ -33,6 +35,8 @@ import {
 } from './estimate';
 import {
   assertOutsideRepo,
+  cellKeyOf,
+  copyCellKeyOf,
   extractorVersionOf,
   GuardError,
   MemoryLedger,
@@ -77,6 +81,8 @@ export interface BeforeApplyInfo {
   readonly baseCostUsd: number | null;
   /** False when some cells could not be sized (the estimate is incomplete). */
   readonly baseComplete: boolean;
+  /** Cell keys (hashes) of the cells this run would send to the model; for the paid-twice overlap check. */
+  readonly cellKeys?: readonly string[] | undefined;
 }
 
 export interface PilotIo {
@@ -95,6 +101,11 @@ export interface PilotIo {
    * model client exists. Throw a GuardError to refuse: nothing is started. Absent = no extra guard.
    */
   beforeApply?(info: BeforeApplyInfo): void | Promise<void>;
+  /**
+   * Optional observer (the unattended job's plan step): called with the same facts as
+   * `beforeApply`, in dry-run and in apply, right after the PROPOSAL is printed. It cannot refuse.
+   */
+  onProposal?(info: BeforeApplyInfo): void;
   /** Opens (and creates) the JSONL ledger. Called only for an existing directory in dry-run. */
   openLedger(dir: string): Ledger;
   /** The checkout and the working directory: a ledger inside either is refused. */
@@ -243,6 +254,8 @@ export interface PilotOutcome {
   readonly selection: Selection;
   readonly preview: T3Report;
   readonly applied: T3Report | null;
+  /** Set when `--incremental`: what the sibling ledgers already hold, and what is left to pay. */
+  readonly incremental: IncrementalPlan | null;
 }
 
 export async function runPilot(args: PilotArgs, io: PilotIo): Promise<PilotOutcome> {
@@ -271,9 +284,17 @@ export async function runPilot(args: PilotArgs, io: PilotIo): Promise<PilotOutco
   const candidates = await io.loadCandidates(args.accountId);
   const policy: SelectionPolicy = { windowStart: args.windowStart, variant: args.variant };
   const selection = selectCandidates(candidates, policy);
-  const keptById = new Map(selection.selected.map((s) => [s.candidate.fileId, s]));
+  // Incremental (S9): the pool is only what no sibling ledger has paid under this signature.
+  let prior: PriorLedgers | null = null;
+  let inc: IncrementalPlan | null = null;
+  if (args.incremental && dir !== null) {
+    prior = readPriorLedgers(dir, args.accountId, io.repoRoots[0] ?? process.cwd());
+    inc = planIncremental(selection, sig, prior.records, { retryFailed: args.retryFailed });
+  }
+  const pool = inc ? inc.toPay : selection.selected;
+  const keptById = new Map(pool.map((s) => [s.candidate.fileId, s]));
   let sample = stratifiedSample(
-    selection.selected.map((s) => ({ fileId: s.candidate.fileId, docClass: s.docClass })),
+    pool.map((s) => ({ fileId: s.candidate.fileId, docClass: s.docClass })),
     args.sampleSize,
     args.sampleSeed,
   );
@@ -318,8 +339,9 @@ export async function runPilot(args: PilotArgs, io: PilotIo): Promise<PilotOutco
   const needsText = apply || args.readText;
   const recorder = new RecordingReader(needsText ? io.makeReader() : unusedReader);
   // A dry-run never opens a ledger it would have to create; an existing one is read for the resume view.
-  const ledger: Ledger =
+  const ownLedger: Ledger =
     dir !== null && dirState.state === 'resumable' ? io.openLedger(dir) : new MemoryLedger();
+  const ledger: Ledger = prior ? new ChainedLedger(prior.records, ownLedger) : ownLedger;
 
   const common = {
     policy,
@@ -377,11 +399,27 @@ export async function runPilot(args: PilotArgs, io: PilotIo): Promise<PilotOutco
     }),
   );
   io.print(`arm to run: ${args.model}   (any other arm above is a reference only)`);
+  const armBase = preview.estimates.find((e) => e.model === args.model)?.base;
+  const proposalInfo: BeforeApplyInfo = {
+    cells: sample.fileIds.length,
+    model: args.model,
+    baseCostUsd: armBase ? armBase.costUsd : null,
+    baseComplete: armBase ? armBase.complete : false,
+    cellKeys: sample.fileIds.map((id) =>
+      cellKeyOf((keptById.get(id) as { candidate: T3Candidate }).candidate, sig),
+    ),
+  };
+  io.onProposal?.(proposalInfo);
   io.print('');
   io.print('PILOT DETAILS');
   io.print(
     `account: ${args.accountId}   window-start: ${args.windowStart}   variant: ${args.variant}   seed: ${args.sampleSeed}`,
   );
+  if (inc && prior) {
+    io.print(
+      `incremental: ${prior.ledgers} earlier ledger(s) read (${inc.priorRecords} records); cells already paid ${inc.unchanged}; new files with paid content ${inc.paidContent}; copy lines to add (rows only, $0) ${inc.carries.length}; cells to pay ${inc.toPay.length}${inc.retried > 0 ? ` (retried failures ${inc.retried})` : ''}`,
+    );
+  }
   io.print(
     `shortlist (kept cells, one per content hash): ${sample.pool}   tiers A ${selection.tierCounts.A} / B ${selection.tierCounts.B} / C ${selection.tierCounts.C}`,
   );
@@ -422,21 +460,33 @@ export async function runPilot(args: PilotArgs, io: PilotIo): Promise<PilotOutco
 
   if (!apply) {
     io.print('dry-run: no run started, no sink touched, no model client created (exit 3)');
-    return { exitCode: PILOT_EXIT.dryRun, sample, selection, preview, applied: null };
+    return {
+      exitCode: PILOT_EXIT.dryRun,
+      sample,
+      selection,
+      preview,
+      applied: null,
+      incremental: inc,
+    };
   }
 
   // ---- apply: every guard has passed; the caller's guard, then header, then the stage ----
-  if (io.beforeApply) {
-    const armBase = preview.estimates.find((e) => e.model === args.model)?.base;
-    await io.beforeApply({
-      cells: sample.fileIds.length,
-      model: args.model,
-      baseCostUsd: armBase ? armBase.costUsd : null,
-      baseComplete: armBase ? armBase.complete : false,
-    });
-  }
+  if (io.beforeApply) await io.beforeApply(proposalInfo);
   const approval = args.approval as NonNullable<PilotArgs['approval']>;
   const target = dir as string;
+  // A quiet day: nothing to pay and no copy line to add. Nothing is created: no directory, no
+  // header, no model client, no sink.
+  if (
+    inc &&
+    dirState.state !== 'resumable' &&
+    sample.fileIds.length === 0 &&
+    inc.carries.length === 0
+  ) {
+    io.print(
+      'incremental: nothing new since the earlier ledgers: no ledger written, no model call, $0',
+    );
+    return { exitCode: PILOT_EXIT.ok, sample, selection, preview, applied: null, incremental: inc };
+  }
   if (dirState.state !== 'resumable') {
     const header: LedgerHeader = {
       v: 1,
@@ -454,9 +504,58 @@ export async function runPilot(args: PilotArgs, io: PilotIo): Promise<PilotOutco
     };
     writeHeader(target, header);
   }
+  const openedLedger = io.openLedger(target);
+  const applyLedger: Ledger = prior ? new ChainedLedger(prior.records, openedLedger) : openedLedger;
+  if (inc) {
+    // $0 copies of content an earlier ledger paid: lines only; the loader turns them into rows.
+    const ownKeys = new Set(openedLedger.load().map((r) => r.cellKey));
+    const at = (io.now ?? new Date()).toISOString();
+    for (const c of inc.carries) {
+      const key = copyCellKeyOf(c.keptCellKey, c.ref.fileId);
+      if (ownKeys.has(key)) continue;
+      applyLedger.append({
+        v: 1,
+        cellKey: key,
+        extractorVersion: extractorVersionOf(sig),
+        at,
+        status: 'copy',
+        reason: c.why === 'md5_paid' ? 'md5_copy_of_paid' : 'listing_copy_of_paid',
+        copyOfCellKey: c.keptCellKey,
+        candidate: {
+          fileId: c.ref.fileId,
+          accountId: c.ref.accountId,
+          createdTime: c.ref.createdTime,
+          projectRef: c.ref.projectRef,
+        },
+        docClass: c.ref.docClass,
+        contentHash: null,
+        docType: null,
+        truncated: false,
+        sentChars: null,
+        attempts: 0,
+        usage: null,
+        mentions: [],
+        sanitizeStats: null,
+        groundingStats: null,
+      });
+    }
+    if (sample.fileIds.length === 0) {
+      io.print(
+        `incremental: ${inc.carries.length} copy line(s) written, no cell to pay: no model client created, $0`,
+      );
+      return {
+        exitCode: PILOT_EXIT.ok,
+        sample,
+        selection,
+        preview,
+        applied: null,
+        incremental: inc,
+      };
+    }
+  }
   const applied = await runT3(
     { ...common, mode: 'apply', approval },
-    deps({ ledger: io.openLedger(target), sink: io.makeSink(), llmFactory: io.makeLlm }),
+    deps({ ledger: applyLedger, sink: io.makeSink(), llmFactory: io.makeLlm }),
     stageCandidates,
   );
   const run = applied.run;
@@ -475,5 +574,5 @@ export async function runPilot(args: PilotArgs, io: PilotIo): Promise<PilotOutco
       : run.status === 'stopped'
         ? PILOT_EXIT.stopped
         : PILOT_EXIT.ok;
-  return { exitCode, sample, selection, preview, applied };
+  return { exitCode, sample, selection, preview, applied, incremental: inc };
 }
