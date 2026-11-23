@@ -56,7 +56,12 @@ describe('PgEvidenceReader', () => {
     expect(sql.sql).toMatch(/FROM evidence/);
     expect(sql.sql).toMatch(/ORDER BY id/);
     expect(sql.sql).toMatch(/LIMIT/);
-    expect(sql.sql).not.toMatch(/raw_name|quote|role_raw/);
+    expect(sql.sql).not.toMatch(/raw_name/);
+    // The quote and the raw role are read only as presence flags, never as text.
+    const withoutFlags = sql.sql
+      .replace(/\(quote IS NOT NULL\)/, '')
+      .replace(/\(role_raw IS NOT NULL\)/, '');
+    expect(withoutFlags).not.toMatch(/quote|role_raw/);
     expect(sql.values).toEqual([ACCOUNT, '00000000-0000-0000-0000-000000000000', 500]);
   });
 

@@ -164,7 +164,7 @@ describe('paid-twice detector', () => {
 describe('fusion version pin reminder', () => {
   it('speaks only when a pin is set and differs from the code', () => {
     expect(fusionPinReminder({})).toBeNull();
-    expect(fusionPinReminder({ CASTING_FUSION_VERSION: 'fusion-v1' })).toBeNull();
+    expect(fusionPinReminder({ CASTING_FUSION_VERSION: 'fusion-v2' })).toBeNull();
     expect(fusionPinReminder({ CASTING_FUSION_VERSION: 'fusion-v0' })).toMatch(/fusion-v0/);
   });
 });

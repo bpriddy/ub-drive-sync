@@ -59,9 +59,9 @@ describe('a served claim', () => {
       roleNorm: 'art_director',
       periodStart: '2023-03-01',
       periodEnd: '2023-06-30',
-      confidence: 0.938, // 1 - 0.1 * 0.7 * 0.88
+      confidence: 0.877, // T3 capped at 0.8 (quote, role): 1 - 0.2 * 0.7 * 0.88
       withheldReason: null,
-      fusionVersion: 'fusion-v1',
+      fusionVersion: 'fusion-v2',
     });
     expect(c.tiers).toEqual(['T1', 'T2', 'T3']);
     expect(c.evidenceIds).toEqual(rows.map((r) => r.id).sort());
@@ -253,16 +253,25 @@ describe('what is withheld, never served', () => {
 describe('pitch handling', () => {
   const lost = { pieceId: null, campaignId: CAMPAIGN_LOST } as const;
 
-  it('a strong, corroborated claim on a lost pitch is still served, with a lower confidence', () => {
+  it('a lost pitch needs more corroboration: two tiers are withheld, broad three-tier evidence is served', () => {
     const normal = fuse(baseInput([t3('copywriter', { confidence: 0.9 }), t1()]));
-    const lostOut = fuse(
+    const twoTiers = fuse(
       baseInput([t3('copywriter', { confidence: 0.9, ...lost }), t1({ ...lost })]),
-    );
-    const c = lostOut.claims[0] as FusedClaim;
-    expect(c.pitchFactor).toBe(0.7);
-    expect(c.row.confidence).toBe(0.708); // 1 - (1 - 0.63) * (1 - 0.21)
-    expect(c.row.confidence).toBeLessThan(normal.claims[0]!.row.confidence);
-    expect(c.row.withheldReason).toBeNull();
+    ).claims[0] as FusedClaim;
+    expect(twoTiers.pitchFactor).toBe(0.7);
+    expect(twoTiers.row.confidence).toBe(0.652); // 1 - (1 - 0.8 * 0.7) * (1 - 0.3 * 0.7)
+    expect(twoTiers.row.confidence).toBeLessThan(normal.claims[0]!.row.confidence);
+    expect(twoTiers.row.withheldReason).not.toBeNull();
+    const threeTiers = fuse(
+      baseInput([
+        t3('copywriter', { confidence: 0.9, ...lost }),
+        t3('copywriter', { confidence: 0.9, fileId: 'second-doc', ...lost }),
+        t1({ ...lost }),
+        t2({ confidence: 0.18, ...lost }),
+      ]),
+    ).claims[0] as FusedClaim;
+    expect(threeTiers.row.confidence).toBeGreaterThanOrEqual(0.7);
+    expect(threeTiers.row.withheldReason).toBeNull();
   });
 
   it('the same evidence that serves on a won project is withheld on a lost pitch', () => {

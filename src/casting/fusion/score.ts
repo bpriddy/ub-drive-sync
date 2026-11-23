@@ -1,9 +1,11 @@
 /**
- * The confidence formula (fusion-v1). Pure arithmetic over a claim's evidence.
+ * The confidence formula (fusion-v2). Pure arithmetic over a claim's evidence.
  *
  * For one claim (person x project x role), over its usable evidence rows:
  *
- *   row strength    s_i  = clamp01(confidence_i) * pitchFactor
+ *   row strength    s_i  = clamp01(confidence_i) * pitchFactor; for a T3 row the
+ *                          confidence is first capped at
+ *                          T3_BASE + T3_QUOTE_STEP*[quote] + T3_ROLE_STEP*[role]
  *                          pitchFactor = LOST_PITCH_FACTOR when the project's
  *                          campaign status says the pitch was lost, else 1
  *   tier score      S_t  = min(TIER_CEILING[t],
@@ -33,6 +35,9 @@ import {
   BREADTH_STEP,
   SERVE_MIN_TIERS,
   TIERS,
+  T3_BASE,
+  T3_QUOTE_STEP,
+  T3_ROLE_STEP,
   TIER_CEILING,
   UNCORROBORATED_CEILING,
   type Tier,
@@ -43,6 +48,9 @@ export interface ScoreRow {
   /** The row's Layer 1 confidence, before the pitch factor. */
   confidence: number;
   fileId: string;
+  /** T3 only: a grounded quote and a stated role are present. Ignored for T1 and T2. */
+  hasQuote?: boolean;
+  hasRole?: boolean;
 }
 
 export interface ScoreResult {
@@ -56,6 +64,12 @@ export interface ScoreResult {
 export const round3 = (x: number): number => Math.round(x * 1000) / 1000;
 const clamp01 = (x: number): number => (Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0);
 
+/** A content row's strength: capped by what the mention shows (quote, role). */
+export function t3RowStrength(confidence: number, hasQuote: boolean, hasRole: boolean): number {
+  const shown = T3_BASE + (hasQuote ? T3_QUOTE_STEP : 0) + (hasRole ? T3_ROLE_STEP : 0);
+  return Math.min(clamp01(confidence), shown);
+}
+
 export function scoreClaim(rows: readonly ScoreRow[], pitchFactor: number): ScoreResult {
   const tierScores: Partial<Record<Tier, number>> = {};
   for (const tier of TIERS) {
@@ -63,7 +77,11 @@ export function scoreClaim(rows: readonly ScoreRow[], pitchFactor: number): Scor
     const files = new Set<string>();
     for (const r of rows) {
       if (r.tier !== tier) continue;
-      const s = clamp01(r.confidence) * pitchFactor;
+      const base =
+        tier === 'T3'
+          ? t3RowStrength(r.confidence, r.hasQuote === true, r.hasRole === true)
+          : clamp01(r.confidence);
+      const s = base * pitchFactor;
       if (s <= 0) continue;
       if (s > best) best = s;
       files.add(r.fileId);

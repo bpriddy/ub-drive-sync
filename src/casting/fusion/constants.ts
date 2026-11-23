@@ -12,7 +12,7 @@ import type { RoleNorm } from './vocab';
 import { CASTING_MIN_CONFIDENCE, CASTING_MIN_TIERS } from './vocab';
 import type { EvidenceSource } from './vocab';
 
-export const FUSION_VERSION = 'fusion-v1';
+export const FUSION_VERSION = 'fusion-v2';
 /** `sync_runs.source` of an apply run. [VERIFY: no CHECK on sync_runs.source; the D3 record needs a line for it.] */
 export const FUSION_SYNC_SOURCE = 'casting_fusion';
 
@@ -38,7 +38,18 @@ export const TIER_OF_SOURCE: Readonly<Record<EvidenceSource, Tier>> = {
  * (nobody wrote that the person held a role), so they stay far below the serving
  * threshold on their own; T3 is the only tier that states a role.
  */
-export const TIER_CEILING: Readonly<Record<Tier, number>> = { T1: 0.5, T2: 0.4, T3: 0.99 };
+export const TIER_CEILING: Readonly<Record<Tier, number>> = { T1: 0.5, T2: 0.4, T3: 0.85 };
+
+/**
+ * T3 row strength (a content mention): what the mention itself shows, capped by
+ * the name-match strength. A bare mention is T3_BASE; a quote grounded in the
+ * text and a stated role each add a step. Before this, the name-match strength
+ * alone (0.95 for an exact name) set every content row, so every served claim
+ * scored 0.96 to 1.00 and confidence could not rank them.
+ */
+export const T3_BASE = 0.6;
+export const T3_QUOTE_STEP = 0.1;
+export const T3_ROLE_STEP = 0.1;
 
 /**
  * Several distinct files in one tier agree with each other: each file beyond the

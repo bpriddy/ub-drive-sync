@@ -31,6 +31,9 @@ export interface FusionEvidence {
   /** Read for T1 only: `name:<key>` is the project key of a name-keyed project. */
   location: string | null;
   confidence: number;
+  /** Presence flags only (T3 row strength): the quote and the raw role text never enter this stage. */
+  hasQuote: boolean;
+  hasRole: boolean;
   withheldReason: WithheldReason | null;
   extractorVersion: string;
 }
