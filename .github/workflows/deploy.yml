@@ -1,6 +1,8 @@
 # Deploy — typecheck gate, build the image, push to Artifact Registry, update
 # the Cloud Run JOB (executions are started by gub-admin's Sync page / the
-# scheduler, not by this workflow).
+# scheduler, not by this workflow). The same image also updates the casting
+# job, when that job is provisioned and CASTING_JOB_ACCOUNT_IDS is set (last
+# step; see the header paragraph on the casting job below).
 #
 # Auth is Workload Identity Federation (OIDC) — no service-account keys.
 # Required GitHub repository variables: GCP_REGION, GCP_PROJECT_ID,
@@ -16,6 +18,19 @@
 # three, and before any job here runs in another Environment (the repo
 # secrets hold prod's values). The deploy fails before touching anything when
 # a value is missing.
+#
+# Casting job (casting staffing track, UB #250): Cloud Run Job
+# gub-drive-sync-casting-dev, the same image with the command overridden to
+# dist/src/casting/maintain/job-main.js (docs/casting-pipeline.md section 7).
+# It is created by scripts/setup-gcp.sh (an inert shell; this workflow never
+# creates it) and is updated here by the last step, which SKIPS with a notice when the
+# job does not exist yet or when the Environment variable
+# CASTING_JOB_ACCOUNT_IDS (comma-separated account uuids) is unset, so the
+# drive-sync deploy above is unaffected either way. It runs the FREE stages
+# only: CASTING_JOB_APPLY is hard-coded to false (a dry-run plan; flipping it
+# is a reviewed change to this file), and no CASTING_T3_* variable is set, so
+# the paid stage cannot run. It has no Scheduler trigger; a run is one manual
+# `gcloud run jobs execute`.
 #
 # THIS WORKFLOW IS THE SINGLE SOURCE OF TRUTH FOR RUNTIME CONFIG (the FLAGS
 # array below). The old Cloud Build configs are retired; the never-provisioned
@@ -151,4 +166,57 @@ jobs:
       - name: Report job image
         run: |
           gcloud run jobs describe "$JOB" --region "$REGION" \
+            --format='value(template.template.containers[0].image)'
+
+      # The casting job: same image, other command (the image ENTRYPOINT is
+      # dist/src/main.js; --command replaces it). Last on purpose: nothing
+      # above depends on it, and every "not ready" case is a skip, not a
+      # failure. `update`, never `deploy`: a missing job must not be created
+      # here (scripts/setup-gcp.sh provisions it).
+      #   - CASTING_JOB_ACCOUNT_IDS comes from the GitHub Environment; unset =
+      #     skip (the job would refuse to run with no accounts anyway).
+      #   - CASTING_JOB_APPLY=false is a literal: the job only plans. The job
+      #     accepts exactly "true" or "false" (anything else refuses the run).
+      #   - No CASTING_T3_* variables, no Gemini or Drive secrets: the free
+      #     stages read and write the database only. DATABASE_URL is the same
+      #     secret as above; the runtime SA and Cloud SQL attachment too.
+      #   - "^@^" makes "@" the env-var separator because the account list
+      #     contains commas.
+      - name: Update casting job
+        env:
+          CASTING_JOB: gub-drive-sync-casting-dev
+          CASTING_JOB_ACCOUNT_IDS: ${{ vars.CASTING_JOB_ACCOUNT_IDS }}
+        run: |
+          if [ -z "$CASTING_JOB_ACCOUNT_IDS" ]; then
+            echo "::notice::Casting job not updated: CASTING_JOB_ACCOUNT_IDS is not set in GitHub Environment prod."
+            exit 0
+          fi
+          if ! printf '%s' "$CASTING_JOB_ACCOUNT_IDS" | grep -Eqi '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}(,[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})*$'; then
+            echo "::error::CASTING_JOB_ACCOUNT_IDS must be comma-separated uuids with no spaces."
+            exit 1
+          fi
+          if ! OUT=$(gcloud run jobs describe "$CASTING_JOB" --region "$REGION" --format='value(metadata.name)' 2>&1); then
+            if printf '%s' "$OUT" | grep -qiE 'not.found|could not be found|does not exist'; then
+              echo "::notice::Casting job $CASTING_JOB is not provisioned in $PROJECT_ID/$REGION yet: skipped."
+              exit 0
+            fi
+            echo "::error::Could not describe $CASTING_JOB: $OUT"
+            exit 1
+          fi
+          FLAGS=(
+            --tasks=1
+            --parallelism=1
+            --max-retries=0
+            --task-timeout=3600s
+            --memory=2Gi
+            --cpu=1
+            "--service-account=$RUNTIME_SA"
+            "--set-cloudsql-instances=$CLOUDSQL"
+            --command=node
+            --args=dist/src/casting/maintain/job-main.js
+            "--set-env-vars=^@^NODE_ENV=production@CASTING_JOB_ACCOUNT_IDS=$CASTING_JOB_ACCOUNT_IDS@CASTING_JOB_APPLY=false"
+            "--set-secrets=DATABASE_URL=gub-drive-sync-db-url-dev:latest"
+          )
+          gcloud run jobs update "$CASTING_JOB" --image "$IMAGE_URI" --region "$REGION" "${FLAGS[@]}"
+          gcloud run jobs describe "$CASTING_JOB" --region "$REGION" \
             --format='value(template.template.containers[0].image)'
