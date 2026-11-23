@@ -309,6 +309,11 @@ export async function runLoad(args: LoadArgs, io: LoadIo): Promise<LoadOutcome> 
     details: {
       mode: 'ledger_load',
       account_id: accountId,
+      // The window cutoff the ledger was selected under (S9: recorded in every run report).
+      window_start:
+        typeof header.signature['windowStart'] === 'string'
+          ? header.signature['windowStart']
+          : null,
       ok_cells: okCells,
       rows_to_write: rows.length,
       copies_expanded: counts.copies.expanded,

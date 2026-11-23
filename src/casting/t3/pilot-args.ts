@@ -9,6 +9,9 @@
  *   --unknown-start-date D  repeatable (YYYY-MM-DD); a staff.started_at that is an import placeholder,
  *                           not a hire date (same meaning as in the T2 stage). Roster-only: it is not
  *                           part of the ledger signature (it never reaches a model call)
+ *   --incremental           (S9) sample only from the cells no earlier ledger of this account has paid;
+ *                           needs an absolute --ledger-dir (its sibling directories are the earlier
+ *                           ledgers). Changes nothing else: every guard still applies
  *
  * Unknown flags are errors: a mistyped `--max-cell` must not silently mean "no limit".
  */
@@ -23,6 +26,8 @@ export interface PilotArgs extends T3Args {
   readonly sampleSeed: string;
   /** Roster option only (see the header); default empty = no behaviour change. */
   readonly unknownStartDates: readonly string[];
+  /** S9: draw the sample from the cells that sibling ledgers have not paid. Default false. */
+  readonly incremental: boolean;
 }
 
 const KNOWN_FLAGS: ReadonlySet<string> = new Set([
@@ -37,6 +42,7 @@ const KNOWN_FLAGS: ReadonlySet<string> = new Set([
   '--parallel',
   '--read-text',
   '--retry-failed',
+  '--incremental',
   '--apply',
   '--max-cells',
   '--max-usd',
@@ -73,7 +79,13 @@ export function parsePilotArgs(argv: readonly string[]): PilotArgs {
     return v;
   };
 
-  const base = parseT3Args(argv);
+  // parseT3Args reads every flag as `--name [value]`; it does not know this one, so it is
+  // taken out of its view (a value-less flag followed by a value would otherwise swallow it).
+  if (flags.has('--incremental') && flags.get('--incremental') !== true) {
+    throw new Error('--incremental takes no value');
+  }
+  const incremental = flags.get('--incremental') === true;
+  const base = parseT3Args(argv.filter((a) => a !== '--incremental'));
 
   const accountId = value('--account-id');
   if (accountId === undefined || !UUID.test(accountId)) {
@@ -99,5 +111,10 @@ export function parsePilotArgs(argv: readonly string[]): PilotArgs {
       );
     }
   }
-  return { ...base, accountId, sampleSize, sampleSeed, unknownStartDates };
+  if (incremental && (base.ledgerDir === null || !path.isAbsolute(base.ledgerDir))) {
+    throw new Error(
+      '--incremental needs an absolute --ledger-dir (its siblings are the earlier ledgers)',
+    );
+  }
+  return { ...base, accountId, sampleSize, sampleSeed, unknownStartDates, incremental };
 }

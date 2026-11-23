@@ -22,6 +22,11 @@ export function realDeps(): RunDeps {
     env: process.env,
     repoRoots: [process.cwd(), path.resolve(__dirname, '..', '..', '..')],
     now: () => new Date(),
+    // Incremental apply only; the probe is read-only and imports Prisma lazily.
+    changeProbe: async (accountId) => {
+      const { prisma } = await import('../../prisma');
+      return (await import('../maintain/change-probe')).probeChanges(prisma, accountId);
+    },
     applyAgencyDomains: (csv) => {
       // One roster option set for every stage: the pilot reads the domains from the env only.
       if (csv !== '') process.env['CASTING_AGENCY_EMAIL_DOMAINS'] = csv;
@@ -36,7 +41,7 @@ export async function runCastingCli(
 ): Promise<number> {
   let args;
   try {
-    args = parseCastingArgs(argv);
+    args = parseCastingArgs(argv, deps.now());
   } catch (err) {
     printError(`REFUSED: ${err instanceof Error ? err.message : String(err)}`);
     return EXIT.refused;

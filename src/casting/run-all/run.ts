@@ -34,17 +34,38 @@ export const EXIT = { ok: 0, failed: 1, refused: 2, plan: 3, stopped: 4, paused:
 export interface StageFns {
   t1(argv: readonly string[]): Promise<number>;
   t2(argv: readonly string[]): Promise<number>;
-  /** The pilot driver (it also runs full waves). `beforeApply` is the orchestrator's guard hook. */
+  /**
+   * The pilot driver (it also runs full waves). `beforeApply` is the orchestrator's guard hook;
+   * `onProposal` (optional) observes the PROPOSAL in dry-run and apply.
+   */
   t3(
     argv: readonly string[],
-    hooks: { beforeApply(info: BeforeApplyInfo): void | Promise<void> },
+    hooks: {
+      beforeApply(info: BeforeApplyInfo): void | Promise<void>;
+      onProposal?(info: BeforeApplyInfo): void;
+    },
   ): Promise<number>;
   load(argv: readonly string[]): Promise<number>;
   fusion(argv: readonly string[]): Promise<number>;
 }
 
+/** Answer of the change probe: did the file index of the account change since the last casting run? */
+export interface ChangeProbeResult {
+  readonly changed: boolean;
+  /** `no_baseline`, `changed`, `no_change`, `probe_error`, `no_probe`: counts-only, safe to log. */
+  readonly reason: string;
+  readonly filesChanged: number | null;
+}
+
 export interface RunDeps {
   readonly stages: StageFns;
+  /**
+   * Incremental apply only: a read-only probe of the account's file index. Absent = assume a
+   * change (the free stages are idempotent, so a missing probe costs a run, never correctness).
+   */
+  readonly changeProbe?: ((accountId: string) => Promise<ChangeProbeResult>) | undefined;
+  /** Observes the T3 PROPOSAL (dry-run and apply); used by the job's plan step. */
+  readonly onProposal?: ((info: BeforeApplyInfo) => void) | undefined;
   /** Receives every log line (stdout in production). */
   readonly out: (line: string) => void;
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -88,7 +109,12 @@ function haltCode(code: number): number {
 const isOk = (code: number, sp: StagePlan): boolean =>
   code === EXIT.ok || (code === EXIT.plan && !sp.apply);
 
-function runStage(sp: StagePlan, args: CastingArgs, stages: StageFns): Promise<number> {
+function runStage(
+  sp: StagePlan,
+  args: CastingArgs,
+  stages: StageFns,
+  onProposal: ((info: BeforeApplyInfo) => void) | undefined,
+): Promise<number> {
   switch (sp.stage) {
     case 't1':
       return stages.t1(sp.argv);
@@ -98,7 +124,22 @@ function runStage(sp: StagePlan, args: CastingArgs, stages: StageFns): Promise<n
       // Only invoked by the pilot in apply, after its own guards; both limits exist then.
       const limits = { expectCells: args.expectCells ?? -1, maxUsd: args.maxUsd ?? 0 };
       return stages.t3(sp.argv, {
-        beforeApply: (info) => checkBeforeApply(info, limits),
+        beforeApply: (info) => {
+          checkBeforeApply(info, limits);
+          if (args.incremental && !args.allowRepeatPaid && sp.pilotArgs && info.cellKeys) {
+            // The same paid-twice detector, by cell: a daily ledger has the same configuration as
+            // yesterday's by design, so only a sibling that already paid one of THESE cells is a twin.
+            const twin = findPaidTwice(args.ledgerDir as string, sp.pilotArgs, {
+              overlapWith: new Set(info.cellKeys),
+            });
+            if (twin !== null) {
+              throw new GuardError(
+                `another ledger directory (${twin}) already paid for at least one of these cells; use --allow-repeat-paid to pay again; nothing was started`,
+              );
+            }
+          }
+        },
+        ...(onProposal ? { onProposal } : {}),
       });
     }
     case 'load':
@@ -134,9 +175,11 @@ export async function runCasting(args: CastingArgs, deps: RunDeps): Promise<RunO
       checkModelEnv(deps.env);
       checkModelPriced(t3.pilotArgs.model);
       checkLedgerOutside(args.ledgerDir as string, deps.repoRoots);
-      const twin = args.allowRepeatPaid
-        ? null
-        : findPaidTwice(args.ledgerDir as string, t3.pilotArgs);
+      // Incremental runs check the twin by cell at apply time (the PROPOSAL knows the cells).
+      const twin =
+        args.allowRepeatPaid || args.incremental
+          ? null
+          : findPaidTwice(args.ledgerDir as string, t3.pilotArgs);
       if (twin !== null) {
         throw new GuardError(
           `another ledger directory (${twin}) already paid for this account and configuration; use --allow-repeat-paid to pay again; nothing was started`,
@@ -149,6 +192,7 @@ export async function runCasting(args: CastingArgs, deps: RunDeps): Promise<RunO
       load.skipReason === null &&
       load.apply &&
       !args.applyT3 &&
+      !args.incremental &&
       args.ledgerDir !== null
     ) {
       if (!fs.existsSync(path.join(args.ledgerDir, PILOT_HEADER_FILE))) {
@@ -180,6 +224,11 @@ export async function runCasting(args: CastingArgs, deps: RunDeps): Promise<RunO
       msg: 'casting-run plan',
       mode,
       windowStart: args.windowStart,
+      // The window cutoff of this run (S9 task 5). A slide moves only what is selected from
+      // now on; it deletes no evidence (docs/casting-pipeline.md, "Sliding window").
+      windowCutoff: args.windowStart,
+      windowYears: args.windowYears,
+      incremental: args.incremental,
       stages: plan.stages.map((s) => ({
         stage: s.stage,
         mode: s.apply ? 'apply' : 'dry-run',
@@ -201,11 +250,39 @@ export async function runCasting(args: CastingArgs, deps: RunDeps): Promise<RunO
     emit(planRec);
     deps.applyAgencyDomains(plan.agencyDomains.join(','));
 
+    // Incremental apply: ask the file index whether anything changed since the last casting run.
+    // A quiet account skips the free stages (they would only open run rows and rebuild Layer 2
+    // to the same content); the paid stage is never gated by this probe, its own delta decides.
+    let quiet = false;
+    if (args.incremental && args.apply) {
+      let probe: ChangeProbeResult;
+      try {
+        probe = deps.changeProbe
+          ? await deps.changeProbe(args.accountId)
+          : { changed: true, reason: 'no_probe', filesChanged: null };
+      } catch (err) {
+        probe = { changed: true, reason: 'probe_error', filesChanged: null };
+        emit({ msg: 'casting-run change probe failed', error: firstLine(err) });
+      }
+      quiet = !probe.changed;
+      emit({
+        msg: 'casting-run change probe',
+        changed: probe.changed,
+        reason: probe.reason,
+        filesChanged: probe.filesChanged,
+      });
+    }
+    // Set once a stage of this run produced something downstream stages must pick up.
+    let newLedger = false;
+
     let wrote = false;
     for (let i = 0; i < plan.stages.length; i++) {
       const sp = plan.stages[i] as StagePlan;
+      const quietSkip =
+        quiet && (sp.stage === 't1' || sp.stage === 't2' || (sp.stage === 'fusion' && !newLedger));
       const skip =
         sp.skipReason ??
+        (quietSkip ? 'no change in the file index since the last casting run' : null) ??
         (sp.needsLedger && !fs.existsSync(path.join(args.ledgerDir as string, PILOT_HEADER_FILE))
           ? 'no ledger yet: nothing to load'
           : null);
@@ -223,7 +300,7 @@ export async function runCasting(args: CastingArgs, deps: RunDeps): Promise<RunO
       let code: number;
       let error: string | null = null;
       try {
-        code = await runStage(sp, args, deps.stages);
+        code = await runStage(sp, args, deps.stages, deps.onProposal);
       } catch (err) {
         code = err instanceof GuardError ? EXIT.refused : EXIT.failed;
         error = firstLine(err);
@@ -237,6 +314,16 @@ export async function runCasting(args: CastingArgs, deps: RunDeps): Promise<RunO
         ...(error !== null ? { error } : {}),
       });
       if (sp.apply) wrote = true;
+      if (
+        sp.stage === 't3' &&
+        sp.apply &&
+        code === EXIT.ok &&
+        args.incremental &&
+        args.ledgerDir !== null &&
+        fs.existsSync(path.join(args.ledgerDir, PILOT_HEADER_FILE))
+      ) {
+        newLedger = true;
+      }
       if (isOk(code, sp)) {
         results[i] = { stage: sp.stage, status: 'ok', exitCode: code };
         continue;
@@ -246,7 +333,10 @@ export async function runCasting(args: CastingArgs, deps: RunDeps): Promise<RunO
       decidedBy = sp.stage;
       break;
     }
-    if (decidedBy === null) exitCode = wrote ? EXIT.ok : EXIT.plan;
+    // A quiet incremental apply is a clean finish (exit 0), not a "plan printed": a scheduled job
+    // must not look failed on a day with nothing to do.
+    if (decidedBy === null)
+      exitCode = wrote || (args.incremental && args.apply) ? EXIT.ok : EXIT.plan;
   } finally {
     if (release) release();
   }
@@ -256,6 +346,7 @@ export async function runCasting(args: CastingArgs, deps: RunDeps): Promise<RunO
     mode,
     exitCode,
     decidedBy,
+    windowCutoff: args.windowStart,
     stages: results,
   });
   return { exitCode, decidedBy, results };

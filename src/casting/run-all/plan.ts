@@ -10,6 +10,11 @@ import { parseLoadArgs } from '../t3/load-args';
 import { parsePilotArgs, type PilotArgs } from '../t3/pilot-args';
 import type { CastingArgs, StageName } from './args';
 
+/** A plan-mode sample size large enough to show a whole incremental delta (no silent cap). */
+export const INCREMENTAL_PLAN_SAMPLE_SIZE = 1_000_000;
+/** The default seed of an incremental run: the delta is a function of content, the seed only orders a capped draw. */
+export const INCREMENTAL_DEFAULT_SEED = 'incremental';
+
 export interface StagePlan {
   readonly stage: StageName;
   /** True when this stage writes (t3: calls the model). */
@@ -90,10 +95,18 @@ export function buildPlan(args: CastingArgs, envAgencyDomains: string | undefine
         argv = [
           ...base,
           ...win,
+          ...(args.incremental ? ['--incremental'] : []),
           '--sample-size',
-          String(args.sampleSize),
+          String(
+            args.sampleSize ??
+              (args.incremental
+                ? apply
+                  ? (args.maxCells as number)
+                  : INCREMENTAL_PLAN_SAMPLE_SIZE
+                : NaN),
+          ),
           '--sample-seed',
-          args.sampleSeed as string,
+          args.sampleSeed ?? (args.incremental ? INCREMENTAL_DEFAULT_SEED : ''),
           ...opt('--model', args.model),
           ...opt('--thinking', args.thinking),
           ...opt('--variant', args.variant),
@@ -122,7 +135,8 @@ export function buildPlan(args: CastingArgs, envAgencyDomains: string | undefine
           ...applyFlag,
         ];
         parseLoadArgs(argv);
-        needsLedger = !apply;
+        // Incremental: the ledger exists only on a day that had something new.
+        needsLedger = !apply || args.incremental;
         break;
       case 'fusion':
         argv = [

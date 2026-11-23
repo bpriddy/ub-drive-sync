@@ -108,6 +108,12 @@ describe('index row choice counters', () => {
 });
 
 describe('apply', () => {
+  it('stamps the account ids on the run record (the incremental change probe reads them)', async () => {
+    const runs = new MemoryRuns();
+    await runT1(deps({ writer: new MemoryWriter(), runs }), options({ apply: true }));
+    expect([...runs.runs.values()][0]?.details).toMatchObject({ account_ids: [ACCOUNT] });
+  });
+
   it('writes through the writer under a sync run, with project references and the window applied', async () => {
     const writer = new MemoryWriter();
     const runs = new MemoryRuns();
