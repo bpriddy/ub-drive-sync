@@ -32,6 +32,11 @@ const ABBREVIATIONS: readonly (readonly [RegExp, string])[] = [
   [/\basst\b/g, 'assistant'],
   [/\bassoc\b/g, 'associate'],
   [/\bexec\b/g, 'executive'],
+  [/\bcomms\b/g, 'communications'],
+  [/\bbus\b/g, 'business'],
+  // Common misspellings of words the rules below depend on.
+  [/\b(buiness|buisness|bussiness|busines|businness)\b/g, 'business'],
+  [/\b(affiars|affars|afairs|affaris)\b/g, 'affairs'],
 ];
 
 /** Lower-case, diacritics stripped, dots dropped, hyphens and brackets to spaces. */
@@ -55,7 +60,7 @@ function prepare(raw: string): string {
 const ROLE_RULES: readonly (readonly [RoleNorm, RegExp])[] = [
   [
     'executive_creative_director',
-    /\b(executive creative director|chief creative officer|chief creative|ecd)\b/,
+    /\b(executive creative director|chief creative officer|chief creative|ecd|cco|gcco)\b/,
   ],
   [
     'associate_creative_director',
@@ -68,6 +73,12 @@ const ROLE_RULES: readonly (readonly [RoleNorm, RegExp])[] = [
     'social_media_specialist',
     /\b(social|community (manager|lead|specialist|director)|content (lead|manager|strategist|creator|specialist))\b/,
   ],
+  // Before the PR rule: "head of comms strategy" is a strategy title, not a PR one.
+  [
+    'strategy_director',
+    /\b((head|director) of communications strategy|communications strategy director)\b/,
+  ],
+  ['strategist', /\bcommunications (strategy|strategist)\b/],
   [
     'pr_specialist',
     /\b(pr|publicist|public relations|communications (lead|manager|director|specialist)|head of (pr|communications))\b/,
@@ -83,14 +94,25 @@ const ROLE_RULES: readonly (readonly [RoleNorm, RegExp])[] = [
   ['strategist', /\b(strategist|planner)\b/],
   [
     'account_director',
-    /\b(account director|client lead|client service director|client services director|head of (account|client))\b/,
+    /\b(account director|account lead|client lead|client service director|client services director|business director|head of (account|client))\b/,
   ],
-  ['account_executive', /\b(account executive|account coordinator|account assistant|ae)\b/],
-  ['account_manager', /\b(account manager|client manager|am)\b/],
-  ['executive_producer', /\b(executive producer|head of production|ep)\b/],
+  [
+    'account_executive',
+    /\b(account executive|account coordinator|account assistant|account intern|ae)\b/,
+  ],
+  ['account_manager', /\b(account manager|account supervisor|account contact|client manager|am)\b/],
+  [
+    'executive_producer',
+    /\b(executive producer|head of production|production director|director of production|ep)\b/,
+  ],
   ['production_manager', /\b(production manager|traffic manager|traffic)\b/],
-  ['producer', /\bproducer\b/],
-  ['project_manager', /\b(project manager|project lead|pm)\b/],
+  // A bare "Production" is the producer's function; it is anchored so that
+  // "Music Production" or "Production Designer" never reach it.
+  ['producer', /\bproducer\b|^((senior|junior|lead|associate|assistant) )*production$/],
+  [
+    'project_manager',
+    /\b(project manager|project lead|project director|program director|programme director|pm)\b/,
+  ],
   ['technologist', /\b(technologist|developer)\b/],
   ['finance', /\b(finance|financial|business manager|controller)\b/],
   ['data_analyst', /\b(analyst|insights?|data scientist)\b/],
@@ -117,7 +139,7 @@ function segmentsOf(prepared: string): string[] {
 const MARKERS: readonly (readonly [Seniority, RegExp])[] = [
   [
     'executive',
-    /\b(vp|svp|evp|vice president|president|chief|managing director|partner|executive creative director|executive director|ecd)\b/,
+    /\b(vp|svp|evp|vice president|president|chief|ceo|cco|gcco|managing director|partner|executive creative director|executive director|ecd)\b/,
   ],
   ['director', /\b(director|head of|cd|acd)\b/],
   ['lead', /\b(lead|principal|group)\b/],
