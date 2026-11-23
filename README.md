@@ -122,12 +122,16 @@ the mode; subsequent flags are mode-specific (`--sync-run-id=<uuid>` for
 ## CI / CD
 
 GitHub Actions deploys: `.github/workflows/deploy.yml` builds the image
-and updates the Cloud Run Job `gub-drive-sync-dev` on every push to `main`
-(or a manual dispatch). That workflow is the single source of runtime
-config. Deployment identifiers are not in it: they come from repository
-secrets (listed in its header, masked in run logs), and a deploy with one
-unset fails before it touches anything. `cloudbuild/staging.yaml` / `prod.yaml` remain as
-provisioning references until those environments are ported. Unlike a
+and updates the Cloud Run Job `gub-drive-sync-dev`. A push to `main` no
+longer deploys (D37 step 1): `os-test-491819` is UB prod, so a deploy is a
+manual dispatch from `main` that runs in the GitHub Environment `prod` and
+waits for bpriddy's approval. That workflow is the single source of runtime
+config. Deployment identifiers are not in it: they come from the GitHub
+Environment's variables `DRIVE_ROOT_FOLDER_ID`, `GUB_ADMIN_BASE_URL` and
+`GUB_REVIEW_BASE_URL` (D37, #89). Until the owner copies them into `prod`,
+each falls back to today's repository secret (`*_DEV`). A deploy with one
+unset fails before it touches anything. The never-provisioned staging/prod
+Cloud Build configs were removed (D37). Unlike a
 Service, a Job has **no traffic/promotion step** — `jobs deploy` updates
 the definition and the next `jobs:run` uses the new image.
 
@@ -155,7 +159,7 @@ The script prints the remaining manual steps:
 
 1. Connect the GitHub repo to Cloud Build (browser, one-time).
 2. Populate the five secrets per env.
-3. Push to `main` → first deploy creates the Job.
+3. Dispatch the Deploy workflow on `main` and approve it → first deploy creates the Job.
 4. **Re-run `setup-gcp.sh`** — the three job-scoped bindings can't be
    created until the Job exists.
 5. Apply the updated `gcp-universal-backend/terraform/drive_poll.tf` so
