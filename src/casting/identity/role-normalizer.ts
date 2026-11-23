@@ -4,7 +4,9 @@
  *
  *  - empty or placeholder text            -> roleNorm null, seniority null (no role stated)
  *  - a title no rule recognises           -> 'other'
- *  - a title naming two different roles   -> 'other' (reason 'multi_role'); never the first one
+ *  - a title naming two different roles   -> 'other' (reason 'multi_role'); never the first one,
+ *    except that `executive_leadership` (a seat, not a function) yields to any functional
+ *    role in the same title: "Managing Partner, Account Lead" is `account_director`
  *  - seniority comes from explicit markers in the same title and is independent
  *    of the function: "Senior Zookeeper" is ('other', 'senior'); "Copywriter" is
  *    ('copywriter', null). Several markers: the highest wins.
@@ -92,6 +94,9 @@ const ROLE_RULES: readonly (readonly [RoleNorm, RegExp])[] = [
     /\b(strategy director|head of strategy|director of strategy|chief strategy officer|planning director|head of planning)\b/,
   ],
   ['strategist', /\b(strategist|planner)\b/],
+  // Before the account rules; "business manager" (finance) and "business director"
+  // (account) do not contain "business affairs". "ba" is only read in "head/director of ba".
+  ['business_affairs', /\b(business affairs|(head|director) of ba)\b/],
   [
     'account_director',
     /\b(account director|account lead|client lead|client service director|client services director|business director|head of (account|client))\b/,
@@ -101,6 +106,12 @@ const ROLE_RULES: readonly (readonly [RoleNorm, RegExp])[] = [
     /\b(account executive|account coordinator|account assistant|account intern|ae)\b/,
   ],
   ['account_manager', /\b(account manager|account supervisor|account contact|client manager|am)\b/],
+  // Before the production rules: "music production [director]" is not a producer title.
+  // Bare "Music" is the function; "music video ..." is not listed and stays with the producer rules.
+  [
+    'music_audio',
+    /\b(music (director|production|supervisor|producer|lead)|(director|head) of music( production)?)\b|^((senior|junior|lead|associate|assistant|head) )*music$/,
+  ],
   [
     'executive_producer',
     /\b(executive producer|head of production|production director|director of production|ep)\b/,
@@ -113,6 +124,12 @@ const ROLE_RULES: readonly (readonly [RoleNorm, RegExp])[] = [
     'project_manager',
     /\b(project manager|project lead|project director|program director|programme director|pm)\b/,
   ],
+  // "operations" alone is too vague (and "production operations" is not listed): the
+  // title has to say business operations, head/director of operations or an operations lead seat.
+  [
+    'operations',
+    /\b(business operations|(head|director) of operations|operations (lead|manager|director|head))\b/,
+  ],
   ['technologist', /\b(technologist|developer)\b/],
   ['finance', /\b(finance|financial|business manager|controller)\b/],
   ['data_analyst', /\b(analyst|insights?|data scientist)\b/],
@@ -121,6 +138,15 @@ const ROLE_RULES: readonly (readonly [RoleNorm, RegExp])[] = [
     /\b(copywriter|copy writer|writer)\b|^((senior|junior|lead|associate|assistant) )*copy$/,
   ],
   ['designer', /\bdesigner\b/],
+  // Last on purpose: a seat, not a function. "Managing Partner Operations Lead" is
+  // `operations`, "Partner & Global CCO" is `executive_creative_director` (the CCO rule is
+  // first and the multi-role check drops this one). Bare "partner", "owner" and
+  // "president" only when they stand alone ("Client Partner", "Product Owner" and "Vice
+  // President" are not leadership seats).
+  [
+    'executive_leadership',
+    /\b(ceo|chief executive officer|managing partner|founding partner|managing director)\b|^((senior|equity|general|name|co) )*(partner|owner)$|^((group|agency|regional) )?president$/,
+  ],
 ];
 
 function matchSegment(segment: string): RoleNorm | null {
@@ -175,7 +201,14 @@ export function normalizeRole(raw: string | null | undefined): RoleNormalization
     if (role !== null) roles.add(role);
   }
 
+  // A leadership seat does not compete with a function named in the same title.
+  if (roles.size > 1) roles.delete('executive_leadership');
+
   if (roles.size === 0) return { roleNorm: 'other', seniority, reason: 'unmapped' };
   if (roles.size > 1) return { roleNorm: 'other', seniority, reason: 'multi_role' };
-  return { roleNorm: [...roles][0] as RoleNorm, seniority, reason: 'mapped' };
+  const roleNorm = [...roles][0] as RoleNorm;
+  // The leadership seat is executive by definition ("Owner" carries no marker word).
+  if (roleNorm === 'executive_leadership')
+    return { roleNorm, seniority: 'executive', reason: 'mapped' };
+  return { roleNorm, seniority, reason: 'mapped' };
 }

@@ -17,8 +17,8 @@ describe('casting vocabulary (gub-schemas package vs snapshot)', () => {
     expect([...ROLE_NORMS]).toEqual(snapshot.role_norms);
   });
 
-  it('role_norm has 23 values and keeps `other` last', () => {
-    expect(ROLE_NORMS).toHaveLength(23);
+  it('role_norm has 27 values and keeps `other` last', () => {
+    expect(ROLE_NORMS).toHaveLength(27);
     expect(ROLE_NORMS[ROLE_NORMS.length - 1]).toBe('other');
     expect(new Set(ROLE_NORMS).size).toBe(ROLE_NORMS.length);
   });
