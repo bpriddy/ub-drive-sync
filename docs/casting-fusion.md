@@ -40,7 +40,7 @@ gives identical rows, hashes, ids and metrics (property tests in
 
 Since `fusion-v4` (gcp-universal-schemas#39, UB ARCHITECTURE-DECISIONS D41), the
 formula of `fusion-v3` is unchanged. The output is rolled up from claims (staff,
-project, role) into two join tables, and `experience` is no longer written:
+project, role) into two join tables; `experience` is no longer written (UB drops it):
 
 | Table | One row per | From which claims |
 |---|---|---|
@@ -101,8 +101,8 @@ tiers on a lost pitch fall below 0.7).
 
 All constants are named in `constants.ts`. NONE IS CALIBRATED: they fix orderings
 and ceilings, and there is no ground truth. Changing a constant or the formula
-bumps `FUSION_VERSION`; Layer 2 is keyed by `(fusion_version, experience_hash)`, so
-the serving layer must read one version only.
+bumps `FUSION_VERSION`; the staff work rows are keyed by `(build_version, row_hash)`,
+so the serving layer must read one build only.
 
 ## Newest content version of a file (`fusion-v3`)
 
@@ -216,7 +216,8 @@ evidence, with the same rule as `validationLabel()` in `fuse.ts`.
 ## Changing `fusion_version`: operational order
 
 Serving reads exactly ONE build version, named by UB's pin `STAFF_WORK_BUILD_VERSION`
-(D41; the casting pin `CASTING_FUSION_VERSION` retires with `experience`).
+(D41; the casting pin `CASTING_FUSION_VERSION` was removed with the casting read, and
+UB drops the `experience` tables in its removal release).
 Applying a new version to an account removes that account's rows of every other
 version in the same transaction, so after the apply the pinned (old) version has no
 rows for that account and the served answer for it is EMPTY until the pin is
