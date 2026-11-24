@@ -8,7 +8,7 @@ logic and writes nothing to the database itself.
 
 ```
 T1 metadata evidence -> T2 activity evidence -> T3 model run (paid, ledger only)
-  -> T3 ledger loader (Layer 1 rows) -> fusion rebuild (staff_accounts / staff_campaigns, D41) -> UB reads them
+  -> T3 ledger loader (Layer 1 rows) -> fusion rebuild (staff_accounts / staff_campaigns, D43) -> UB reads them
 ```
 
 By hand, each stage is a separate CLI with its own copy of the flags. Hazards removed: a flag typed

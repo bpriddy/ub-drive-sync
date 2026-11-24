@@ -1,6 +1,6 @@
 /**
  * Read-only Postgres reader of the drift monitor: aggregate counts over `evidence` and the
- * account's drive_casting `staff_accounts` rows of one build version (fusion-v4, D41: one row per
+ * account's drive_casting `staff_accounts` rows of one build version (fusion-v4, D43: one row per
  * person, account and role; its `tiers` column is the tier agreement). SELECT only, no names,
  * quotes or ids come back. Raw SQL like the other casting adapters.
  *

@@ -13,7 +13,7 @@ import { CASTING_MIN_CONFIDENCE, CASTING_MIN_TIERS } from './vocab';
 import type { EvidenceSource } from './vocab';
 
 /**
- * fusion-v4 (gcp-universal-schemas#39, UB D41): the fusion-v3 formula unchanged;
+ * fusion-v4 (gcp-universal-schemas#39, UB D43): the fusion-v3 formula unchanged;
  * the output is rolled up into `staff_accounts` / `staff_campaigns` (rollup.ts)
  * instead of `experience`. The version is the `build_version` of those rows.
  */

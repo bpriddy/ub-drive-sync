@@ -1,6 +1,6 @@
 /**
  * Rollup of the fused claims into the staff work join tables (fusion-v4,
- * gcp-universal-schemas#39, UB ARCHITECTURE-DECISIONS D41).
+ * gcp-universal-schemas#39, UB ARCHITECTURE-DECISIONS D43).
  *
  * The formula is the one of fusion-v3 (fuse.ts, score.ts); only the output
  * changes. One claim is (staff, project, role); the tables are:

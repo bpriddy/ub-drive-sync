@@ -38,7 +38,7 @@ gives identical rows, hashes, ids and metrics (property tests in
 
 ## Output: the staff work join tables (`fusion-v4`)
 
-Since `fusion-v4` (gcp-universal-schemas#39, UB ARCHITECTURE-DECISIONS D41), the
+Since `fusion-v4` (gcp-universal-schemas#39, UB ARCHITECTURE-DECISIONS D43), the
 formula of `fusion-v3` is unchanged. The output is rolled up from claims (staff,
 project, role) into two join tables; `experience` is no longer written (UB drops it):
 
@@ -216,7 +216,7 @@ evidence, with the same rule as `validationLabel()` in `fuse.ts`.
 ## Changing `fusion_version`: operational order
 
 Serving reads exactly ONE build version, named by UB's pin `STAFF_WORK_BUILD_VERSION`
-(D41; the casting pin `CASTING_FUSION_VERSION` was removed with the casting read, and
+(D43; the casting pin `CASTING_FUSION_VERSION` was removed with the casting read, and
 UB drops the `experience` tables in its removal release).
 Applying a new version to an account removes that account's rows of every other
 version in the same transaction, so after the apply the pinned (old) version has no
