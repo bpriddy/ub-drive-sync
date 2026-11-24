@@ -8,7 +8,7 @@ logic and writes nothing to the database itself.
 
 ```
 T1 metadata evidence -> T2 activity evidence -> T3 model run (paid, ledger only)
-  -> T3 ledger loader (Layer 1 rows) -> fusion rebuild (Layer 2) -> UB endpoint reads Layer 2
+  -> T3 ledger loader (Layer 1 rows) -> fusion rebuild (staff_accounts / staff_campaigns, D41) -> UB reads them
 ```
 
 By hand, each stage is a separate CLI with its own copy of the flags. Hazards removed: a flag typed
@@ -122,8 +122,8 @@ Paid stage:
 7. Halt on exit 4.
 
 All stages: dry-run default, explicit `--apply`, one account, unknown flag = error, argv validated up front.
-Fusion pin: `fusion --apply` replaces the account's Layer 2 rows, so serving is empty until
-`CASTING_FUSION_VERSION` is switched (`docs/casting-fusion.md`); the plan line warns when the env pin differs
+Fusion pin: `fusion --apply` replaces the account's staff work rows, so serving is empty until
+`STAFF_WORK_BUILD_VERSION` is switched (`docs/casting-fusion.md`); the plan line warns when the env pin differs
 from the code's version.
 
 The per-account switch (D14: `log` then `strict`, named owner, written cutover plan) is, for the job,

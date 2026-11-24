@@ -1,6 +1,8 @@
 /**
- * Fusion stage driver: reads Layer 1 of each account, fuses it, and (only with
- * `apply`) replaces that account's Layer 2 output in one transaction.
+ * Fusion stage driver: reads Layer 1 of each account, fuses it, rolls the claims
+ * up into staff work rows (rollup.ts), and (only with `apply`) replaces that
+ * account's drive_casting `staff_accounts` / `staff_campaigns` rows in one
+ * transaction.
  *
  * Dry-run is the default and writes nothing: no rows, no `sync_runs` row. It
  * still READS `evidence`, so it needs the UB migration too: before it, both modes
@@ -12,16 +14,17 @@
  */
 import { FUSION_VERSION } from './constants';
 import { fuse } from './fuse';
+import { rollUp } from './rollup';
 import type {
   ActivityHorizon,
   CatalogLoader,
   EvidenceReader,
-  ExperienceWriter,
   FusionEvidence,
   FusionMetrics,
   FusionRunStore,
   RunCounts,
   StaffLoader,
+  StaffWorkWriter,
   WriteCounts,
 } from './types';
 
@@ -39,7 +42,7 @@ export interface FusionDeps {
   /** Optional: without it the T2-agreement proxy is empty. */
   activity?: ActivityHorizon | undefined;
   /** Required in apply mode. */
-  writer?: ExperienceWriter | undefined;
+  writer?: StaffWorkWriter | undefined;
   /** Required in apply mode. */
   runs?: FusionRunStore | undefined;
   logger?: FusionLogger | undefined;
@@ -56,6 +59,13 @@ export interface FusionOptions {
 export interface FusionAccountReport {
   accountId: string;
   metrics: FusionMetrics;
+  /** Staff work rows the rollup built (written only in apply mode). */
+  rows: {
+    accounts: number;
+    accountsServed: number;
+    campaigns: number;
+    campaignsServed: number;
+  };
   /** null in dry-run. */
   written: WriteCounts | null;
 }
@@ -79,15 +89,16 @@ export async function runFusion(deps: FusionDeps, options: FusionOptions): Promi
     throw new RangeError('chunkSize must be a positive integer');
   const apply = options.apply;
   if (apply && (!deps.writer || !deps.runs)) {
-    throw new Error('apply mode needs an experience writer and a run store');
+    throw new Error('apply mode needs a staff work writer and a run store');
   }
   const today = options.today.toISOString().slice(0, 10);
   const accounts: FusionAccountReport[] = [];
   const counts: RunCounts = {
     evidenceRows: 0,
-    deleted: 0,
-    deletedOtherVersions: 0,
-    inserted: 0,
+    deletedAccounts: 0,
+    deletedCampaigns: 0,
+    insertedAccounts: 0,
+    insertedCampaigns: 0,
     links: 0,
   };
 
@@ -122,28 +133,38 @@ export async function runFusion(deps: FusionDeps, options: FusionOptions): Promi
         activityStartByAccount: new Map([[accountId, horizon]]),
       });
 
+      const rollup = rollUp({ accountId, buildVersion: FUSION_VERSION, claims: out.claims });
+      const rows = {
+        accounts: rollup.accounts.length,
+        accountsServed: rollup.accounts.filter((r) => r.withheldReason === null).length,
+        campaigns: rollup.campaigns.length,
+        campaignsServed: rollup.campaigns.filter((r) => r.withheldReason === null).length,
+      };
+
       let written: WriteCounts | null = null;
       if (apply) {
-        written = await (deps.writer as ExperienceWriter).replaceAccount({
+        written = await (deps.writer as StaffWorkWriter).replaceAccount({
           accountId,
-          fusionVersion: FUSION_VERSION,
+          buildVersion: FUSION_VERSION,
           syncRunId: runId as string,
-          claims: out.claims,
+          rollup,
         });
-        counts.deleted += written.deleted;
-        counts.deletedOtherVersions += written.deletedOtherVersions;
-        counts.inserted += written.inserted;
+        counts.deletedAccounts += written.deletedAccounts;
+        counts.deletedCampaigns += written.deletedCampaigns;
+        counts.insertedAccounts += written.insertedAccounts;
+        counts.insertedCampaigns += written.insertedCampaigns;
         counts.links += written.links;
       }
       counts.evidenceRows += evidence.length;
-      accounts.push({ accountId, metrics: out.metrics, written });
+      accounts.push({ accountId, metrics: out.metrics, rows, written });
       deps.logger?.info(
         {
           accountId,
           mode: apply ? 'apply' : 'dry-run',
           evidenceRows: evidence.length,
-          stored: out.metrics.claims.stored,
-          served: out.metrics.claims.served,
+          claims: out.metrics.claims.stored,
+          claimsServed: out.metrics.claims.served,
+          ...rows,
         },
         '[casting.fusion] account finished',
       );
@@ -164,7 +185,7 @@ export async function runFusion(deps: FusionDeps, options: FusionOptions): Promi
       runId as string,
       'success',
       counts,
-      `success: evidence=${counts.evidenceRows} deleted=${counts.deleted} otherVersionsDeleted=${counts.deletedOtherVersions} inserted=${counts.inserted} links=${counts.links}`,
+      `success: evidence=${counts.evidenceRows} staff_accounts -${counts.deletedAccounts} +${counts.insertedAccounts} staff_campaigns -${counts.deletedCampaigns} +${counts.insertedCampaigns} links=${counts.links}`,
     );
   }
   return {

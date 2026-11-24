@@ -199,9 +199,14 @@ export function checkBeforeApply(
   }
 }
 
-/** A fusion version pin that differs from the code's version means serving is empty after an apply. */
+/**
+ * A build version pin that differs from the code's version means serving is empty
+ * after an apply. UB serves one `build_version` of the staff work tables
+ * (`STAFF_WORK_BUILD_VERSION`, D41); fusion --apply replaces the account's rows
+ * with this code's version.
+ */
 export function fusionPinReminder(env: Env): string | null {
-  const pin = (env['CASTING_FUSION_VERSION'] ?? '').trim();
+  const pin = (env['STAFF_WORK_BUILD_VERSION'] ?? '').trim();
   if (pin === '' || pin === FUSION_VERSION) return null;
-  return `CASTING_FUSION_VERSION is ${pin} but this code builds ${FUSION_VERSION}: after fusion --apply the served answer for the account is empty until the pin is switched`;
+  return `STAFF_WORK_BUILD_VERSION is ${pin} but this code builds ${FUSION_VERSION}: after fusion --apply the served answer for the account is empty until the pin is switched`;
 }
