@@ -164,7 +164,9 @@ describe('paid-twice detector', () => {
 describe('fusion version pin reminder', () => {
   it('speaks only when a pin is set and differs from the code', () => {
     expect(fusionPinReminder({})).toBeNull();
-    expect(fusionPinReminder({ CASTING_FUSION_VERSION: 'fusion-v3' })).toBeNull();
-    expect(fusionPinReminder({ CASTING_FUSION_VERSION: 'fusion-v0' })).toMatch(/fusion-v0/);
+    expect(fusionPinReminder({ STAFF_WORK_BUILD_VERSION: 'fusion-v4' })).toBeNull();
+    expect(fusionPinReminder({ STAFF_WORK_BUILD_VERSION: 'fusion-v0' })).toMatch(/fusion-v0/);
+    // the casting pin is retired with experience (D44): it no longer speaks
+    expect(fusionPinReminder({ CASTING_FUSION_VERSION: 'fusion-v0' })).toBeNull();
   });
 });

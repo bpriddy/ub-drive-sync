@@ -4,12 +4,12 @@ import type {
   ActivityHorizon,
   CatalogLoader,
   EvidenceReader,
-  ExperienceWriter,
-  FusedClaim,
   FusionEvidence,
   FusionRunStore,
   RunCounts,
   StaffLoader,
+  StaffWorkRollup,
+  StaffWorkWriter,
 } from '../types';
 import {
   ACCOUNT,
@@ -62,19 +62,21 @@ function sinks() {
   const calls: string[] = [];
   const written: Array<{
     accountId: string;
-    fusionVersion: string;
+    buildVersion: string;
     syncRunId: string;
-    claims: readonly FusedClaim[];
+    rollup: StaffWorkRollup;
   }> = [];
-  const writer: ExperienceWriter = {
+  const writer: StaffWorkWriter = {
     async replaceAccount(args) {
       calls.push(`write:${args.accountId}`);
       written.push(args);
+      const { accounts, campaigns } = args.rollup;
       return {
-        deleted: 1,
-        deletedOtherVersions: 2,
-        inserted: args.claims.length,
-        links: args.claims.reduce((n, c) => n + c.evidenceIds.length, 0),
+        deletedAccounts: 1,
+        deletedCampaigns: 2,
+        insertedAccounts: accounts.length,
+        insertedCampaigns: campaigns.length,
+        links: [...accounts, ...campaigns].reduce((n, r) => n + r.evidenceIds.length, 0),
       };
     },
   };
@@ -82,7 +84,7 @@ function sinks() {
   const runs: FusionRunStore = {
     async open(details) {
       calls.push('open');
-      expect(details).toMatchObject({ stage: 'casting_fusion', fusion_version: 'fusion-v3' });
+      expect(details).toMatchObject({ stage: 'casting_fusion', fusion_version: 'fusion-v4' });
       return 'b0000000-0000-4000-8000-000000000002';
     },
     async finish(_id, status, counts, summary) {
@@ -122,13 +124,16 @@ describe('runFusion', () => {
     );
     expect(report).toMatchObject({
       mode: 'dry-run',
-      fusionVersion: 'fusion-v3',
+      fusionVersion: 'fusion-v4',
       today: TODAY,
       runId: null,
       status: 'success',
     });
     expect(report.accounts.map((a) => a.accountId)).toEqual([ACCOUNT, OTHER_ACCOUNT].sort());
     expect(report.accounts.every((a) => a.written === null)).toBe(true);
+    // the rollup still runs in dry-run, so the report says what apply would write
+    const mine = report.accounts.find((a) => a.accountId === ACCOUNT)!;
+    expect(mine.rows).toEqual({ accounts: 1, accountsServed: 1, campaigns: 1, campaignsServed: 1 });
     expect(s.calls).toEqual([]);
     expect(p.staff.seen).toEqual([TODAY]); // the only clock is the injected one
   });
@@ -159,13 +164,16 @@ describe('runFusion', () => {
       'finish:success',
     ]);
     expect(
-      s.written.every((w) => w.fusionVersion === 'fusion-v3' && w.syncRunId === report.runId),
+      s.written.every((w) => w.buildVersion === 'fusion-v4' && w.syncRunId === report.runId),
     ).toBe(true);
     expect(s.finished[0]?.counts).toMatchObject({
       evidenceRows: 3,
-      deleted: 2,
-      deletedOtherVersions: 4,
+      deletedAccounts: 2,
+      deletedCampaigns: 4,
     });
+    expect(s.finished[0]?.summary).toMatch(
+      /^success: evidence=3 staff_accounts -2 \+\d+ staff_campaigns -4 \+\d+ links=\d+$/,
+    );
     expect(report.accounts.every((a) => a.written !== null)).toBe(true);
   });
 
@@ -225,7 +233,7 @@ describe('runFusion', () => {
     const p = ports(sample());
     const s = sinks();
     s.writer.replaceAccount = async () => {
-      throw new Error('relation "experience" does not exist (42P01)');
+      throw new Error('relation "staff_accounts" does not exist (42P01)');
     };
     await expect(
       runFusion(

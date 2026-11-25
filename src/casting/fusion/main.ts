@@ -4,11 +4,11 @@
  * command override or locally:
  *
  *   node dist/src/casting/fusion/main.js --account-id <uuid>            (dry-run)
- *   node dist/src/casting/fusion/main.js --account-id <uuid> --apply    (rebuilds Layer 2)
+ *   node dist/src/casting/fusion/main.js --account-id <uuid> --apply    (rebuilds the account's staff work rows)
  *
- * Dry-run is the default and writes nothing. Both modes need the UB migration for
- * `evidence` (and apply for `experience`) applied first: before it they fail with
- * Postgres 42P01. No model is called. The report on stdout is counts only.
+ * Dry-run is the default and writes nothing. Both modes need the UB migrations for
+ * `evidence` (and apply for the staff work tables, 20261124200000_staff_work)
+ * applied first: before them they fail with Postgres 42P01. No model is called. The report on stdout is counts only.
  */
 import { prisma } from '../../prisma';
 import { logger } from '../../logger';
@@ -17,9 +17,9 @@ import {
   PgActivityHorizon,
   PgCatalogLoader,
   PgEvidenceReader,
-  PgExperienceWriter,
   PgFusionRunStore,
   PgStaffLoader,
+  PgStaffWorkWriter,
 } from './pg-adapters';
 import { runFusion } from './run';
 
@@ -32,7 +32,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       staff: new PgStaffLoader(prisma, args.unknownStartDates),
       activity: new PgActivityHorizon(prisma),
       ...(args.apply
-        ? { writer: new PgExperienceWriter(prisma), runs: new PgFusionRunStore(prisma) }
+        ? { writer: new PgStaffWorkWriter(prisma), runs: new PgFusionRunStore(prisma) }
         : {}),
       logger,
     },

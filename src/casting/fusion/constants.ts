@@ -12,7 +12,14 @@ import type { RoleNorm } from './vocab';
 import { CASTING_MIN_CONFIDENCE, CASTING_MIN_TIERS } from './vocab';
 import type { EvidenceSource } from './vocab';
 
-export const FUSION_VERSION = 'fusion-v3';
+/**
+ * fusion-v4 (gcp-universal-schemas#39, UB D44): the fusion-v3 formula unchanged;
+ * the output is rolled up into `staff_accounts` / `staff_campaigns` (rollup.ts)
+ * instead of `experience`. The version is the `build_version` of those rows.
+ */
+export const FUSION_VERSION = 'fusion-v4';
+/** `source` of every row this stage writes; it never touches a `manual` row. */
+export const STAFF_WORK_SOURCE = 'drive_casting' as const;
 /** `sync_runs.source` of an apply run. [VERIFY: no CHECK on sync_runs.source; the D3 record needs a line for it.] */
 export const FUSION_SYNC_SOURCE = 'casting_fusion';
 
@@ -119,7 +126,7 @@ export const INCOMPATIBLE_ROLE_PAIRS: readonly IncompatibleRolePair[] = [
  */
 export const STORE_PRESENCE_ONLY_CLAIMS = false;
 
-/** Rows per INSERT into `experience` (15 columns each, far below the 65535-parameter limit). */
-export const EXPERIENCE_INSERT_BATCH = 500;
-/** Rows per INSERT into `experience_evidence_links` (3 parameters each). */
+/** Rows per INSERT into `staff_accounts` / `staff_campaigns` (at most 18 columns each, far below the 65535-parameter limit). */
+export const STAFF_WORK_INSERT_BATCH = 500;
+/** Rows per INSERT into the `*_evidence_links` tables (3 parameters each). */
 export const LINK_INSERT_BATCH = 2000;

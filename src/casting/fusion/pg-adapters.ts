@@ -1,30 +1,34 @@
 /**
  * Postgres adapters for the fusion stage: Layer 1 reader, accounts / campaigns /
- * staff readers, the Layer 2 writer and the `sync_runs` store.
+ * staff readers, the staff work writer and the `sync_runs` store.
  *
- * Raw SQL on purpose, like the T1 / T2 adapters: `evidence`, `experience` and
- * `experience_evidence_links` exist only after the UB migration (gub-schemas
- * 1.26.0), and the generated Prisma client of this repo's pinned package does not
- * know them. Raw SQL keeps the stage compiling and fails with a clear Postgres
+ * Raw SQL on purpose, like the T1 / T2 adapters: `evidence` and the staff work
+ * tables (`staff_accounts`, `staff_campaigns` and their `*_evidence_links`, UB
+ * migration 20261124200000_staff_work) are written and read with plain SQL, so
+ * the stage does not depend on the generated client knowing them. Raw SQL keeps the stage compiling and fails with a clear Postgres
  * error (42P01, relation "evidence" does not exist) instead of a late P2022.
  *
  * DEPLOY ORDER (the P2022 trap): apply the UB migration to the environment's
- * database BEFORE running this stage, in either mode: dry-run reads `evidence` too.
+ * database BEFORE running this stage, in either mode: dry-run reads `evidence` too,
+ * and apply writes the staff work tables (20261124200000_staff_work).
  *
  * Nothing here is exercised against a real database by the unit tests: they check
  * the SQL shape and parameters with a fake client.
  */
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { EXPERIENCE_INSERT_BATCH, LINK_INSERT_BATCH, FUSION_SYNC_SOURCE } from './constants';
-import { linkId } from './fuse';
+import {
+  FUSION_SYNC_SOURCE,
+  LINK_INSERT_BATCH,
+  STAFF_WORK_INSERT_BATCH,
+  STAFF_WORK_SOURCE,
+} from './constants';
+import { staffWorkLinkId } from './rollup';
 import { PgStatsReader } from '../t2/pg-adapters';
 import type { RawClient } from '../t1/pg-adapters';
 import type {
   ActivityHorizon,
   CatalogLoader,
   EvidenceReader,
-  ExperienceWriter,
-  FusedClaim,
   FusionCampaign,
   FusionCatalog,
   FusionEvidence,
@@ -34,6 +38,8 @@ import type {
   RunCounts,
   RunStatus,
   StaffLoader,
+  StaffWorkRollup,
+  StaffWorkWriter,
   WriteCounts,
 } from './types';
 import {
@@ -277,75 +283,114 @@ export type TxClient = {
 /** A large account's rebuild must not hit Prisma's 5 s default transaction timeout. */
 export const WRITE_TX_OPTIONS = { maxWait: 30_000, timeout: 300_000 } as const;
 
-export class PgExperienceWriter implements ExperienceWriter {
+export class PgStaffWorkWriter implements StaffWorkWriter {
   constructor(private readonly db: TxClient) {}
 
   /**
-   * One transaction per account: delete the account's rows of every OTHER
-   * fusion_version, delete its rows of this version, insert the new claims, insert
-   * the links. Either all of it lands or none. Links of deleted rows cascade. Before
-   * the UB migration the first DELETE fails with 42P01.
-   *
-   * OPERATIONAL ORDER: serving reads exactly one version (the pin
-   * CASTING_FUSION_VERSION), so after an apply of a NEW version the old version's
-   * rows of that account are gone and the pinned read returns nothing for it until
-   * the pin is switched. See docs/casting-fusion.md.
+   * One transaction per account. Deletes the account's drive_casting rows of
+   * every build version: its `staff_accounts` rows, and the `staff_campaigns`
+   * rows of its campaigns plus of any campaign this rollup writes (so a campaign
+   * that moved accounts cannot collide on (build_version, row_hash)). Links
+   * cascade. Then inserts the rows and their links. Either all of it lands or
+   * none. `manual` rows are never touched: every DELETE carries
+   * `source = 'drive_casting'`. Before the UB migration (20261124200000_staff_work)
+   * the first DELETE fails with 42P01.
    */
   async replaceAccount(args: {
     accountId: string;
-    fusionVersion: string;
+    buildVersion: string;
     syncRunId: string;
-    claims: readonly FusedClaim[];
+    rollup: StaffWorkRollup;
   }): Promise<WriteCounts> {
+    const { accounts, campaigns } = args.rollup;
+    const writtenCampaignIds = [...new Set(campaigns.map((r) => r.campaignId))].sort();
     return this.db.$transaction(async (tx) => {
-      const deletedOtherVersions = await tx.$executeRaw(Prisma.sql`
-        DELETE FROM experience
+      const deletedAccounts = await tx.$executeRaw(Prisma.sql`
+        DELETE FROM staff_accounts
          WHERE account_id = ${args.accountId}::uuid
-           AND fusion_version <> ${args.fusionVersion}
+           AND source = ${STAFF_WORK_SOURCE}
       `);
-      const deleted = await tx.$executeRaw(Prisma.sql`
-        DELETE FROM experience
-         WHERE fusion_version = ${args.fusionVersion}
-           AND account_id = ${args.accountId}::uuid
+      const deletedCampaigns = await tx.$executeRaw(Prisma.sql`
+        DELETE FROM staff_campaigns
+         WHERE source = ${STAFF_WORK_SOURCE}
+           AND (campaign_id IN (SELECT id FROM campaigns WHERE account_id = ${args.accountId}::uuid)
+                OR campaign_id = ANY(${writtenCampaignIds}::uuid[]))
       `);
 
-      let inserted = 0;
-      for (let i = 0; i < args.claims.length; i += EXPERIENCE_INSERT_BATCH) {
-        const part = args.claims.slice(i, i + EXPERIENCE_INSERT_BATCH);
-        const tuples = part.map(
-          ({ row: r }) => Prisma.sql`(
-          ${r.id}::uuid, ${r.staffId}::uuid, ${r.accountId}::uuid, ${r.jobNumber},
-          ${r.campaignId}::uuid, ${r.pieceId}::uuid, ${r.roleNorm}, ${r.seniority},
-          ${r.periodStart}::date, ${r.periodEnd}::date, ${r.confidence}::float8, ${r.withheldReason},
-          ${r.fusionVersion}, ${args.syncRunId}::uuid, ${r.experienceHash}
+      let insertedAccounts = 0;
+      for (let i = 0; i < accounts.length; i += STAFF_WORK_INSERT_BATCH) {
+        const tuples = accounts.slice(i, i + STAFF_WORK_INSERT_BATCH).map(
+          (r) => Prisma.sql`(
+          ${r.id}::uuid, ${r.staffId}::uuid, ${r.accountId}::uuid, ${r.roleNorm}, ${r.seniority},
+          ${r.periodStart}::date, ${r.periodEnd}::date, ${r.source}, ${r.confidence}::float8,
+          ${r.tiers}::smallint, ${r.activityChecked}, ${r.withheldReason},
+          ${r.buildVersion}, ${r.rowHash}, ${args.syncRunId}::uuid
         )`,
         );
-        inserted += await tx.$executeRaw(Prisma.sql`
-          INSERT INTO experience (
-            id, staff_id, account_id, job_number,
-            campaign_id, piece_id, role_norm, seniority,
-            period_start, period_end, confidence, withheld_reason,
-            fusion_version, sync_run_id, experience_hash
+        insertedAccounts += await tx.$executeRaw(Prisma.sql`
+          INSERT INTO staff_accounts (
+            id, staff_id, account_id, role_norm, seniority,
+            period_start, period_end, source, confidence,
+            tiers, activity_checked, withheld_reason,
+            build_version, row_hash, sync_run_id
           ) VALUES ${Prisma.join(tuples)}
         `);
       }
 
-      const links = args.claims.flatMap((c) =>
-        c.evidenceIds.map((e) => ({ experienceId: c.row.id, evidenceId: e })),
-      );
-      let linked = 0;
-      for (let i = 0; i < links.length; i += LINK_INSERT_BATCH) {
-        const part = links.slice(i, i + LINK_INSERT_BATCH);
-        const tuples = part.map(
-          (l) =>
-            Prisma.sql`(${linkId(l.experienceId, l.evidenceId)}::uuid, ${l.experienceId}::uuid, ${l.evidenceId}::uuid)`,
+      let insertedCampaigns = 0;
+      for (let i = 0; i < campaigns.length; i += STAFF_WORK_INSERT_BATCH) {
+        const tuples = campaigns.slice(i, i + STAFF_WORK_INSERT_BATCH).map(
+          (r) => Prisma.sql`(
+          ${r.id}::uuid, ${r.staffId}::uuid, ${r.campaignId}::uuid, ${r.pieceId}::uuid, ${r.jobNumber},
+          ${r.roleNorm}, ${r.seniority}, ${r.periodStart}::date, ${r.periodEnd}::date,
+          ${r.source}, ${r.confidence}::float8, ${r.tiers}::smallint, ${r.activityChecked},
+          ${r.withheldReason}, ${r.buildVersion}, ${r.rowHash}, ${args.syncRunId}::uuid
+        )`,
         );
-        linked += await tx.$executeRaw(Prisma.sql`
-          INSERT INTO experience_evidence_links (id, experience_id, evidence_id)
-          VALUES ${Prisma.join(tuples)}
+        insertedCampaigns += await tx.$executeRaw(Prisma.sql`
+          INSERT INTO staff_campaigns (
+            id, staff_id, campaign_id, piece_id, job_number,
+            role_norm, seniority, period_start, period_end,
+            source, confidence, tiers, activity_checked,
+            withheld_reason, build_version, row_hash, sync_run_id
+          ) VALUES ${Prisma.join(tuples)}
         `);
       }
-      return { deleted, deletedOtherVersions, inserted, links: linked };
+
+      let linked = 0;
+      const linkSets = [
+        {
+          table: Prisma.raw('staff_account_evidence_links'),
+          column: Prisma.raw('staff_account_id'),
+          links: accounts.flatMap((r) => r.evidenceIds.map((e) => [r.id, e] as const)),
+        },
+        {
+          table: Prisma.raw('staff_campaign_evidence_links'),
+          column: Prisma.raw('staff_campaign_id'),
+          links: campaigns.flatMap((r) => r.evidenceIds.map((e) => [r.id, e] as const)),
+        },
+      ];
+      for (const set of linkSets) {
+        for (let i = 0; i < set.links.length; i += LINK_INSERT_BATCH) {
+          const tuples = set.links
+            .slice(i, i + LINK_INSERT_BATCH)
+            .map(
+              ([rowId, evidenceId]) =>
+                Prisma.sql`(${staffWorkLinkId(rowId, evidenceId)}::uuid, ${rowId}::uuid, ${evidenceId}::uuid)`,
+            );
+          linked += await tx.$executeRaw(Prisma.sql`
+            INSERT INTO ${set.table} (id, ${set.column}, evidence_id)
+            VALUES ${Prisma.join(tuples)}
+          `);
+        }
+      }
+      return {
+        deletedAccounts,
+        deletedCampaigns,
+        insertedAccounts,
+        insertedCampaigns,
+        links: linked,
+      };
     }, WRITE_TX_OPTIONS);
   }
 }
@@ -387,7 +432,7 @@ export class PgFusionRunStore implements FusionRunStore {
         completedAt: new Date(),
         durationMs: run ? Date.now() - run.startedAt.getTime() : null,
         totalScanned: counts.evidenceRows,
-        created: counts.inserted,
+        created: counts.insertedAccounts + counts.insertedCampaigns,
         skipped: 0,
         errored: status === 'failed' ? 1 : 0,
       },

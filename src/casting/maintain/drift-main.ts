@@ -3,7 +3,7 @@
  * JSON line of counts and rates on stdout, nothing written anywhere.
  *
  *   node dist/src/casting/maintain/drift-main.js --account-id UUID
- *        [--fusion-version fusion-v3]    the Layer 2 version to read (default: this code's)
+ *        [--fusion-version fusion-v4]    the staff work build version to read (default: this code's)
  *        [--window-start YYYY-MM-DD]     also count served claims that ended before this cutoff
  *        [--compare /path/previous.json] a previous report (the JSON this command printed)
  *        [--fail-on-breach]              exit 6 when a threshold is crossed (default exit 0)

@@ -1,10 +1,10 @@
-# Casting fusion (Layer 1 to Layer 2)
+# Casting fusion (Layer 1 to the staff work tables)
 
 Stage entry: `src/casting/fusion/main.ts` (standalone job, no HTTP, not wired into `src/main.ts`).
 
 ```
 node dist/src/casting/fusion/main.js --account-id <uuid>          # dry-run, writes nothing
-node dist/src/casting/fusion/main.js --account-id <uuid> --apply  # rebuilds Layer 2 of the account
+node dist/src/casting/fusion/main.js --account-id <uuid> --apply  # rebuilds the account's staff work rows
 ```
 
 Flags: `--account-id` (repeatable, required), `--apply`, `--chunk-size`,
@@ -27,10 +27,52 @@ gives identical rows, hashes, ids and metrics (property tests in
 - Newer `extractor_version` supersedes older, per (source, file).
 - A T3 file read again after an edit counts with its newest load only (below).
 - Presence-only claims (no content row) are counted, not stored (`STORE_PRESENCE_ONLY_CLAIMS`).
-- `--apply` rebuilds one account in ONE transaction: delete the account's rows of
-  every OTHER `fusion_version` (their links cascade), delete its rows of this
-  version, insert the new rows, insert the links. Layer 2 is a rebuildable
-  projection; only Layer 1 is append-only.
+- The claims are rolled up into the staff work join tables (`rollup.ts`, below)
+  and only those rows are stored. Claims are no longer stored.
+- `--apply` rebuilds one account in ONE transaction. It deletes the account's
+  `drive_casting` rows of every build version: its `staff_accounts` rows, and the
+  `staff_campaigns` rows of its campaigns and of every campaign it writes. Their
+  links cascade. Then it inserts the new rows and their links. It never touches a
+  `manual` row (added in gub-admin). The tables are a rebuildable projection;
+  only Layer 1 is append-only.
+
+## Output: the staff work join tables (`fusion-v4`)
+
+Since `fusion-v4` (gcp-universal-schemas#39, UB ARCHITECTURE-DECISIONS D44), the
+formula of `fusion-v3` is unchanged. The output is rolled up from claims (staff,
+project, role) into two join tables; `experience` is no longer written (UB drops it):
+
+| Table | One row per | From which claims |
+|---|---|---|
+| `staff_campaigns` | staff, campaign, piece, role | the claims whose project resolves to a campaign; a piece-level claim does not also produce a piece-less row |
+| `staff_accounts` | staff, account, role | every claim on the account: its campaigns' claims and the account-level ones (job-only and folder-name projects, projectless claims) |
+
+A row built from several claims takes its values as follows:
+
+- **Served or withheld.** The row is served (`withheld_reason` NULL) when at
+  least one of its claims is served, and then every other column comes from the
+  served claims only. Otherwise the reason is `conflicting` if any claim
+  conflicts, else `unconfirmed`, and the columns come from all of the claims.
+- **Period.** The envelope: the earliest known start and the latest known end.
+  An end that falls before the start is dropped to NULL, so the period CHECK
+  holds.
+- **`confidence`:** the strongest claim.
+- **`tiers`:** the distinct tiers across the claims.
+- **`seniority`:** the highest.
+- **`activity_checked`:** the rolled-up period is dated and a T2 row stands
+  behind it (the rule of `validationLabel()`).
+- **`staff_campaigns.job_number`:** the claims' job number, or the first in
+  text order when they disagree.
+- **Evidence links** (`staff_account_evidence_links`,
+  `staff_campaign_evidence_links`): the union of the claims' Layer 1 rows.
+- **`row_hash`** = sha256 over (staff, account, role) or (staff, campaign,
+  piece, role), so it leaves the period and the build out. `build_version` is
+  `FUSION_VERSION`, and the row id is derived from both.
+
+`run.ts` reports, per account, the rows the rollup built (`rows.accounts`,
+`rows.accountsServed`, `rows.campaigns`, `rows.campaignsServed`), in dry-run
+too. `drift-pg.ts` reads `staff_accounts`, whose `tiers` column is the tier
+agreement. A drift baseline taken on `fusion-v3` is not comparable.
 
 ## Confidence formula (`fusion-v3`, formula unchanged since `fusion-v2`)
 
@@ -59,8 +101,8 @@ tiers on a lost pitch fall below 0.7).
 
 All constants are named in `constants.ts`. NONE IS CALIBRATED: they fix orderings
 and ceilings, and there is no ground truth. Changing a constant or the formula
-bumps `FUSION_VERSION`; Layer 2 is keyed by `(fusion_version, experience_hash)`, so
-the serving layer must read one version only.
+bumps `FUSION_VERSION`; the staff work rows are keyed by `(build_version, row_hash)`,
+so the serving layer must read one build only.
 
 ## Newest content version of a file (`fusion-v3`)
 
@@ -173,7 +215,9 @@ evidence, with the same rule as `validationLabel()` in `fuse.ts`.
 
 ## Changing `fusion_version`: operational order
 
-Serving (S7) reads exactly ONE version, named by the pin `CASTING_FUSION_VERSION`.
+Serving reads exactly ONE build version, named by UB's pin `STAFF_WORK_BUILD_VERSION`
+(D44; the casting pin `CASTING_FUSION_VERSION` was removed with the casting read, and
+UB drops the `experience` tables in its removal release).
 Applying a new version to an account removes that account's rows of every other
 version in the same transaction, so after the apply the pinned (old) version has no
 rows for that account and the served answer for it is EMPTY until the pin is
@@ -181,14 +225,14 @@ switched. Order:
 
 1. Ship the code with the new `FUSION_VERSION`.
 2. Run `--apply` for ALL accounts in as short a window as possible (dry-run first).
-3. Switch `CASTING_FUSION_VERSION` to the new version immediately after the last
+3. Switch `STAFF_WORK_BUILD_VERSION` to the new version immediately after the last
    account finishes.
 4. Between steps 2 and 3 the answer is empty for the rebuilt accounts. If that is
    not acceptable, turn the serving kill switch off for the window.
 
 `fusion-v3` changes served results (it can drop claims that rested on an old content
 version), so the same order applies: do not switch the pin until the rebuild has finished for
-EVERY account. In particular, switch `CASTING_FUSION_VERSION` in UB only after that.
+EVERY account. In particular, switch the pin in UB only after that.
 
 Rolling back is the same order in reverse: deploy the old code, re-apply, switch the pin.
 
@@ -203,7 +247,7 @@ account and year, served claims per year split by `activity_checked` /
 
 ## Deploy order (the P2022 trap)
 
-The UB migration that creates `evidence`, `experience` and
-`experience_evidence_links` (gub-schemas 1.26.0) must be applied BEFORE the job
-runs, in either mode: a dry-run reads `evidence` too. Before the migration both
-modes fail with Postgres 42P01 on purpose.
+The UB migrations that create `evidence` (gub-schemas 1.26.0) and the staff work
+tables (`20261124200000_staff_work`, gub-schemas 1.29.0) must be applied BEFORE
+the job runs. A dry-run reads `evidence`; `--apply` also writes the staff work
+tables. Before the migrations both modes fail with Postgres 42P01 on purpose.

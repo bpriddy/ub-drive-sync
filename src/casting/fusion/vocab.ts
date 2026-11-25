@@ -26,3 +26,15 @@ export type { EvidenceSource } from '../t1/types';
  * tiers (sources) behind it.
  */
 export { CASTING_MIN_CONFIDENCE, CASTING_MIN_TIERS } from '@anomaly-technology/gub-schemas';
+
+/**
+ * The staff work join tables (gub-schemas 1.29.0, `src/staff-work.ts`): the
+ * withheld reasons a row may carry and the tier bounds, mirrored by the
+ * `staff_*_check` CHECKs.
+ */
+export {
+  STAFF_WORK_WITHHELD_REASONS,
+  STAFF_WORK_MIN_TIERS,
+  STAFF_WORK_MAX_TIERS,
+} from '@anomaly-technology/gub-schemas';
+export type { StaffWorkWithheldReason } from '@anomaly-technology/gub-schemas';

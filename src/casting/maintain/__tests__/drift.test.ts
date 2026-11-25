@@ -162,7 +162,10 @@ describe('PgDriftReader: SELECT only, aggregates only', () => {
       expect(c.sql).not.toMatch(/\b(INSERT|UPDATE|DELETE|TRUNCATE|DROP)\b/i);
       expect(c.sql).not.toMatch(/raw_name|\bquote\b|file_id/);
       expect(c.values).toContain(ACCT);
+      if (/staff_accounts/.test(c.sql)) expect(c.sql).toMatch(/source = 'drive_casting'/);
     }
+    expect(calls.filter((c) => /FROM staff_accounts/.test(c.sql))).toHaveLength(3);
+    expect(calls.some((c) => /experience/.test(c.sql))).toBe(false);
   });
 
   it('no cutoff: the window query is not sent', async () => {

@@ -1,11 +1,19 @@
 /**
- * Shared types of the fusion stage (Layer 1 `evidence` -> Layer 2 `experience`).
+ * Shared types of the fusion stage (Layer 1 `evidence` -> the staff work join
+ * tables `staff_accounts` / `staff_campaigns`, gub-schemas 1.29.0).
  *
- * The Layer 2 shapes mirror gub-schemas `prisma/schema.prisma` models
- * Experience and ExperienceEvidenceLink (unpublished 1.26.0, read at the local
- * epic's source tree). Declared here because that version is not pinned yet.
+ * A claim (ExperienceDraft, FusedClaim) is the formula's unit and is no longer
+ * stored: rollup.ts turns the claims of an account into the rows of the two
+ * tables (StaffAccountDraft, StaffCampaignDraft).
  */
-import type { EvidenceSource, PersonKind, RoleNorm, Seniority, WithheldReason } from './vocab';
+import type {
+  EvidenceSource,
+  PersonKind,
+  RoleNorm,
+  Seniority,
+  StaffWorkWithheldReason,
+  WithheldReason,
+} from './vocab';
 import type { Tier } from './constants';
 
 /**
@@ -86,7 +94,7 @@ export interface FusionInput {
 /** `not_validated`: no T2 evidence supports the claim (older years, or no activity data). */
 export type ValidationLabel = 'not_validated' | 'activity_checked';
 
-/** The Layer 2 columns of one claim (id and created_at: id is derived, created_at is the DB's). */
+/** One claim (staff, project, role): the formula's unit, rolled up before storage (rollup.ts). */
 export interface ExperienceDraft {
   id: string;
   staffId: string;
@@ -204,27 +212,64 @@ export interface ActivityHorizon {
   startOf(accountId: string): Promise<string | null>;
 }
 
+/** The columns both staff work tables share, as this stage writes them (source drive_casting). */
+interface StaffWorkDraftBase {
+  id: string;
+  staffId: string;
+  roleNorm: RoleNorm | null;
+  seniority: Seniority | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  source: 'drive_casting';
+  confidence: number;
+  tiers: number;
+  activityChecked: boolean;
+  withheldReason: StaffWorkWithheldReason | null;
+  buildVersion: string;
+  rowHash: string;
+  /** Layer 1 rows behind the row (its *_evidence_links), sorted. */
+  evidenceIds: string[];
+}
+
+/** A `staff_accounts` row: a person on an account. */
+export interface StaffAccountDraft extends StaffWorkDraftBase {
+  accountId: string;
+}
+
+/** A `staff_campaigns` row: a person on a campaign, optionally a piece. */
+export interface StaffCampaignDraft extends StaffWorkDraftBase {
+  campaignId: string;
+  pieceId: string | null;
+  jobNumber: string | null;
+}
+
+export interface StaffWorkRollup {
+  accounts: StaffAccountDraft[];
+  campaigns: StaffCampaignDraft[];
+}
+
 export interface WriteCounts {
-  /** Rows of the SAME fusion_version replaced. */
-  deleted: number;
-  /** Rows of ANY OTHER fusion_version removed for the account (links go with them). */
-  deletedOtherVersions: number;
-  inserted: number;
+  /** drive_casting `staff_accounts` rows of the account removed (every build version). */
+  deletedAccounts: number;
+  /** drive_casting `staff_campaigns` rows of the account's campaigns removed. */
+  deletedCampaigns: number;
+  insertedAccounts: number;
+  insertedCampaigns: number;
   links: number;
 }
 
 /**
- * Replaces the Layer 2 output of one account in ONE transaction: delete the
- * account's rows of every OTHER fusion_version, delete its rows of this version,
- * insert the new claims and links (links of deleted rows cascade).
- * Layer 2 is a rebuildable projection; only Layer 1 is append-only.
+ * Replaces the drive_casting staff work rows of one account in ONE transaction:
+ * delete them (every build version; links cascade), insert the new rows and
+ * links. Never touches a `manual` row. A rebuildable projection; only Layer 1 is
+ * append-only.
  */
-export interface ExperienceWriter {
+export interface StaffWorkWriter {
   replaceAccount(args: {
     accountId: string;
-    fusionVersion: string;
+    buildVersion: string;
     syncRunId: string;
-    claims: readonly FusedClaim[];
+    rollup: StaffWorkRollup;
   }): Promise<WriteCounts>;
 }
 

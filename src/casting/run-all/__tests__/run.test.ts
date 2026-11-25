@@ -87,7 +87,7 @@ describe('PLAN (the default)', () => {
   });
 
   it('warns when the fusion pin differs from the code version', async () => {
-    await runCasting(castingArgs(), f.deps({ env: { CASTING_FUSION_VERSION: 'fusion-v0' } }));
+    await runCasting(castingArgs(), f.deps({ env: { STAFF_WORK_BUILD_VERSION: 'fusion-v0' } }));
     const plan = records(f.lines).find((r) => r['msg'] === 'casting-run plan')!;
     expect(String(plan['warning'])).toMatch(/fusion-v0/);
   });

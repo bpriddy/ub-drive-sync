@@ -1,8 +1,11 @@
 /**
- * Read-only Postgres reader of the drift monitor: aggregate counts over `evidence`,
- * `experience` and `experience_evidence_links` for one account. SELECT only, no names, quotes or
- * ids come back. Raw SQL like the other casting adapters (the casting tables are not in the
- * generated client of this repo's pinned schema package).
+ * Read-only Postgres reader of the drift monitor: aggregate counts over `evidence` and the
+ * account's drive_casting `staff_accounts` rows of one build version (fusion-v4, D44: one row per
+ * person, account and role; its `tiers` column is the tier agreement). SELECT only, no names,
+ * quotes or ids come back. Raw SQL like the other casting adapters.
+ *
+ * The report keeps its `experience` key so `--compare` files stay readable, but from fusion-v4 on
+ * a "claim" in it is a `staff_accounts` row: a baseline taken on fusion-v3 is not comparable.
  */
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { DriftCounts } from './drift';
@@ -28,8 +31,9 @@ export class PgDriftReader {
 
     const reasons = await this.db.$queryRaw<{ reason: string | null; n: number }[]>(Prisma.sql`
       SELECT withheld_reason AS reason, count(*)::int AS n
-        FROM experience
-       WHERE account_id = ${accountId}::uuid AND fusion_version = ${fusionVersion}
+        FROM staff_accounts
+       WHERE account_id = ${accountId}::uuid AND build_version = ${fusionVersion}
+         AND source = 'drive_casting'
        GROUP BY withheld_reason`);
     const withheldByReason: Record<string, number> = {};
     let served = 0;
@@ -50,31 +54,27 @@ export class PgDriftReader {
         max: number | null;
       }[]
     >(Prisma.sql`
-      SELECT count(*) FILTER (WHERE t.tiers >= 2)::int AS multi,
-             min(t.confidence)::float8 AS min,
-             percentile_cont(0.1) WITHIN GROUP (ORDER BY t.confidence)::float8 AS p10,
-             percentile_cont(0.5) WITHIN GROUP (ORDER BY t.confidence)::float8 AS p50,
-             percentile_cont(0.9) WITHIN GROUP (ORDER BY t.confidence)::float8 AS p90,
-             max(t.confidence)::float8 AS max
-        FROM (
-          SELECT x.id, x.confidence, count(DISTINCT e.source) AS tiers
-            FROM experience x
-            LEFT JOIN experience_evidence_links l ON l.experience_id = x.id
-            LEFT JOIN evidence e ON e.id = l.evidence_id
-           WHERE x.account_id = ${accountId}::uuid
-             AND x.fusion_version = ${fusionVersion}
-             AND x.withheld_reason IS NULL
-           GROUP BY x.id, x.confidence
-        ) t`);
+      SELECT count(*) FILTER (WHERE tiers >= 2)::int AS multi,
+             min(confidence)::float8 AS min,
+             percentile_cont(0.1) WITHIN GROUP (ORDER BY confidence)::float8 AS p10,
+             percentile_cont(0.5) WITHIN GROUP (ORDER BY confidence)::float8 AS p50,
+             percentile_cont(0.9) WITHIN GROUP (ORDER BY confidence)::float8 AS p90,
+             max(confidence)::float8 AS max
+        FROM staff_accounts
+       WHERE account_id = ${accountId}::uuid
+         AND build_version = ${fusionVersion}
+         AND source = 'drive_casting'
+         AND withheld_reason IS NULL`);
     const s = served2[0];
 
     let servedBeforeCutoff: number | null = null;
     if (args.windowCutoff !== null) {
       const rows = await this.db.$queryRaw<{ n: number }[]>(Prisma.sql`
         SELECT count(*)::int AS n
-          FROM experience
+          FROM staff_accounts
          WHERE account_id = ${accountId}::uuid
-           AND fusion_version = ${fusionVersion}
+           AND build_version = ${fusionVersion}
+           AND source = 'drive_casting'
            AND withheld_reason IS NULL
            AND period_end IS NOT NULL
            AND period_end < ${args.windowCutoff}::date`);
