@@ -39,6 +39,14 @@ const ObservationSchema = z.object({
   // nullable; absent on account[] obs and on campaign[] obs that don't
   // name a specific campaign.
   entity_campaign_name: z.string().nullable().optional(),
+  // Provenance, optional on purpose: the model is asked for these only while
+  // vision is on (perFileResponseSchema), and an answer without them, or
+  // with a bad value, must never fail a file. Nothing reads them yet; they
+  // end at InterpretFileOutput.
+  /** Where in the file the evidence sits: "Page 7", "Slide 3", "Sheet: Budget". */
+  locator: z.string().nullable().optional(),
+  /** Running text, table or notes ('text') versus a [bracketed] visual description ('visual'). */
+  evidence_kind: z.enum(['text', 'visual']).nullable().optional().catch(null),
 });
 
 export const PerFileResponseSchema = z.object({
@@ -102,7 +110,7 @@ export async function interpretFile(input: InterpretFileInput): Promise<Interpre
 
   const result = await runPreset({
     key: 'drive.file_extraction.v1',
-    responseSchema: perFileResponseSchema(),
+    responseSchema: perFileResponseSchema({ provenance: config.DRIVE_VISION_PDF === 'on' }),
     timeoutMs: config.GEMINI_TIMEOUT_INTERPRET_MS,
     variables: {
       account_name: input.accountName ?? '(unknown)',

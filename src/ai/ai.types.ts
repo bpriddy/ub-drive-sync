@@ -41,6 +41,15 @@ export interface LlmCompletionRequest {
    * GEMINI_TIMEOUT_DEFAULT_MS. A timed-out attempt is retried like a 408.
    */
   timeoutMs?: number;
+  /**
+   * Binary media (a PDF for Gemini document understanding) by Cloud Storage
+   * reference: each entry is sent as a fileData part AHEAD of the text prompt.
+   * The `gs://` object is read by the model service itself; the bytes are never
+   * inlined in the request. Omitted or empty: the request is the plain prompt
+   * string, exactly as before. The mock driver ignores it, so a caller that
+   * needs real content must not take a mock answer as an extraction.
+   */
+  mediaRefs?: Array<{ mimeType: string; fileUri: string }>;
 }
 
 export interface LlmUsage {

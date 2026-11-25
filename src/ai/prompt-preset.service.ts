@@ -32,6 +32,21 @@ export interface RunPresetOptions {
    * change.
    */
   thinkingLevel?: ThinkingLevelName;
+  /** Cap on generated tokens (see LlmCompletionRequest.maxOutputTokens). */
+  maxOutputTokens?: number;
+  /**
+   * Binary media by Cloud Storage reference, sent ahead of the rendered prompt
+   * (see LlmCompletionRequest.mediaRefs). Omitted: a plain text request.
+   */
+  mediaRefs?: Array<{ mimeType: string; fileUri: string }>;
+}
+
+/** The row fields a call needs, with the temperature already a number. */
+export interface LoadedPreset {
+  key: string;
+  template: string;
+  model: string;
+  temperature: number;
 }
 
 const PLACEHOLDER = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
@@ -48,28 +63,50 @@ function renderTemplate(template: string, variables: RunPresetOptions['variables
   });
 }
 
+/**
+ * Reads a preset row. Throws when it is missing or inactive; a caller that must
+ * not fail on that (an optional extraction) catches it and falls back.
+ */
+export async function loadPreset(key: string): Promise<LoadedPreset> {
+  const preset = await prisma.promptPreset.findUnique({ where: { key } });
+  if (!preset) {
+    throw new Error(`[prompt-preset] no preset found with key=${key}`);
+  }
+  if (!preset.isActive) {
+    throw new Error(`[prompt-preset] preset ${key} is inactive`);
+  }
+  return {
+    key: preset.key,
+    template: preset.template,
+    model: preset.model,
+    temperature: Number(preset.temperature),
+  };
+}
+
 export async function runPreset(
   opts: RunPresetOptions,
 ): Promise<LlmCompletionResult & { prompt: string }> {
-  const preset = await prisma.promptPreset.findUnique({ where: { key: opts.key } });
-  if (!preset) {
-    throw new Error(`[prompt-preset] no preset found with key=${opts.key}`);
-  }
-  if (!preset.isActive) {
-    throw new Error(`[prompt-preset] preset ${opts.key} is inactive`);
-  }
+  return runLoadedPreset(await loadPreset(opts.key), opts);
+}
 
+/** runPreset for a row already read by loadPreset (opts.key is the row's key). */
+export async function runLoadedPreset(
+  preset: LoadedPreset,
+  opts: RunPresetOptions,
+): Promise<LlmCompletionResult & { prompt: string }> {
   const prompt = renderTemplate(preset.template, opts.variables);
   const thinkingLevel =
     opts.thinkingLevel ?? thinkingLevelFor(opts.key, config.GEMINI_THINKING_BY_TAG ?? {});
   const result = await defaultLlm.complete({
     model: preset.model,
-    temperature: Number(preset.temperature),
+    temperature: preset.temperature,
     prompt,
     tag: opts.key,
     ...(opts.responseSchema ? { responseSchema: opts.responseSchema } : {}),
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
+    ...(opts.mediaRefs?.length ? { mediaRefs: opts.mediaRefs } : {}),
   });
 
   if (config.GEMINI_CAPTURE_DIR) {
@@ -77,7 +114,7 @@ export async function runPreset(
       capturedAt: new Date().toISOString(),
       key: opts.key,
       model: preset.model,
-      temperature: Number(preset.temperature),
+      temperature: preset.temperature,
       prompt,
       responseSchema: opts.responseSchema ?? null,
       timeoutMs: opts.timeoutMs ?? null,

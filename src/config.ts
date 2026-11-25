@@ -133,6 +133,75 @@ const EnvSchema = z.object({
    */
   SKIP_UNCHANGED_CONTENT: z.enum(['off', 'on']).default('off'),
   /**
+   * Vision extraction of PDFs: the pages go to Gemini by Cloud Storage
+   * reference, together with the PDF's text layer, and come back as the marked
+   * text the Google-native walkers emit, instead of the text layer alone
+   * (image-set decks, charts and tables the text layer drops). `off` (the
+   * default) is the behaviour before it: no vision call, no staging, no change
+   * to any hash or request. `on`, for the scan core's PDFs only (processBatch
+   * asks for it; the v1 sync, discovery and the ideas CLI do not):
+   *   - a PDF within the size and page caps is staged in
+   *     DRIVE_VISION_STAGING_BUCKET (required while `on`), read by Gemini from
+   *     there and deleted after the call; the prompt is the database preset
+   *     `drive.vision_extraction.v1`, and the text layer remains the fallback;
+   *   - a permanent vision failure (cap, block, empty answer) falls back to the
+   *     text layer for good; a transient one (or a preset that cannot be read)
+   *     falls back and leaves the row's content hash off, so the file is read
+   *     again at its next event;
+   *   - the PDF's unchanged-content hash carries a vision marker (only for
+   *     PDFs the caps admit), so turning the flag on re-reads a touched PDF
+   *     once and nothing else.
+   *
+   * Owner: the Drive scan hardening track (#71). Cutover: run the eval
+   * (`npm run eval-vision -- --plan` first, $0), set `on` on dev in deploy.yml
+   * for one account for two or three forward runs, watching the
+   * `[scan.vision] batch` line, `[gemini] usage` by tag `drive.vision_extraction.v1`
+   * and the fallback reasons. If cost and quality hold, `on` becomes the only
+   * behaviour and the flag is deleted. Rollback is `off`: nothing to undo.
+   */
+  DRIVE_VISION_PDF: z.enum(['off', 'on']).default('off'),
+  /**
+   * The short-lived Cloud Storage bucket a vision PDF is staged in (this job
+   * writes, the Vertex AI service agent reads, a lifecycle rule is the
+   * backstop for the delete after each call). Required only while
+   * DRIVE_VISION_PDF=on (checked in loadConfig).
+   */
+  DRIVE_VISION_STAGING_BUCKET: z.string().min(1).optional(),
+  /**
+   * Largest PDF (bytes, from Drive's metadata) sent to vision; a bigger one
+   * keeps the text layer. Gemini accepts a PDF of up to 50 MB by Cloud Storage
+   * reference (document-understanding limits, Vertex AI docs), and the file
+   * never travels inline, so this is a limit of the model, not of memory: the
+   * page cap (DRIVE_VISION_MAX_PDF_PAGES) is the cost control. The download
+   * itself is bound by DOWNLOAD_HEAVY_BYTES / DOWNLOAD_INFLIGHT_BYTES like any
+   * other PDF. A tuning setting.
+   */
+  DRIVE_VISION_MAX_FILE_SIZE_BYTES: z
+    .string()
+    .default('50000000')
+    .transform(Number)
+    .pipe(z.number().int().safe().min(1)),
+  /**
+   * Most pages a PDF may have for vision; a longer one keeps the text layer.
+   * Each page costs about 525 input and a few hundred output tokens. A tuning
+   * setting.
+   */
+  DRIVE_VISION_MAX_PDF_PAGES: z
+    .string()
+    .default('50')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  /**
+   * Output token ceiling for one transcription. A MAX_TOKENS answer is retried
+   * once by the driver and then fails, so a cap that is too low is paid twice.
+   * A tuning setting.
+   */
+  DRIVE_VISION_MAX_OUTPUT_TOKENS: z
+    .string()
+    .default('32768')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  /**
    * Worker-pool concurrency for the per-entity distill+synth+write loop
    * inside processBatch. Each entity owns a discrete status_markdown blob
    * on its own row (one per account, one per campaign) — workers never
@@ -161,6 +230,8 @@ const EnvSchema = z.object({
   GEMINI_TIMEOUT_INTERPRET_MS: timeoutMs('120000'),
   GEMINI_TIMEOUT_DISTILL_MS: timeoutMs('240000'),
   GEMINI_TIMEOUT_CLASSIFY_MS: timeoutMs('420000'),
+  /** Vision transcription of a PDF (DRIVE_VISION_PDF). */
+  GEMINI_TIMEOUT_VISION_MS: timeoutMs('180000'),
   /** Every other Gemini call (synthesis, ideas, asset folders, merges…). */
   GEMINI_TIMEOUT_DEFAULT_MS: timeoutMs('300000'),
 
@@ -244,6 +315,13 @@ export function loadConfig(): Config {
   if (heavy > inflight) {
     throw new Error(
       `Environment configuration invalid:\n  DOWNLOAD_HEAVY_BYTES: must not exceed DOWNLOAD_INFLIGHT_BYTES (${heavy} > ${inflight})`,
+    );
+  }
+  // Cross-field: a vision PDF is staged in a bucket, so the flag cannot be on
+  // without one. Fail at boot rather than on the first PDF.
+  if (parsed.data.DRIVE_VISION_PDF === 'on' && !parsed.data.DRIVE_VISION_STAGING_BUCKET) {
+    throw new Error(
+      'Environment configuration invalid:\n  DRIVE_VISION_STAGING_BUCKET: required when DRIVE_VISION_PDF is on',
     );
   }
   return parsed.data;

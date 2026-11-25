@@ -11,6 +11,7 @@
     "typecheck": "prisma generate && tsc --noEmit",
     "test": "vitest run",
     "eval-ideas": "tsx -r dotenv/config scripts/eval-ideas.ts",
+    "eval-vision": "tsx -r dotenv/config scripts/eval-vision.ts",
     "seed:status": "tsx -r dotenv/config scripts/seed-status-proposal.ts",
     "seed:new-entity": "tsx -r dotenv/config scripts/seed-new-entity-proposal.ts",
     "seed:insights": "tsx -r dotenv/config scripts/seed-insights.ts",
@@ -37,6 +38,7 @@
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.22.0",
     "@google/genai": "^2.11.0",
     "@prisma/client": "^5.22.0",
     "dotenv": "^16.4.7",

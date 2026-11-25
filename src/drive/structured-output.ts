@@ -26,7 +26,7 @@ import { ACCOUNT_WRITABLE_FIELDS, CAMPAIGN_WRITABLE_FIELDS } from './schema';
  * per-file step doesn't know about writable fields or current state;
  * those concerns belong to distillation.
  */
-function observationItemSchema(): Schema {
+function observationItemSchema(provenance: boolean): Schema {
   return {
     type: SchemaType.OBJECT,
     properties: {
@@ -49,12 +49,38 @@ function observationItemSchema(): Schema {
         description:
           'For campaign[] observations: the verbatim name of the campaign this observation is about. Prefer a match from KNOWN_CAMPAIGNS provided in the prompt. Emit a fresh name from the source if the file genuinely references an unknown campaign — the orchestrator does a similarity check and either matches to a known campaign or creates a new candidate. NULL/omitted for account[] observations.',
       },
+      // Optional and never required: a model that leaves them out, or an
+      // old-shaped answer, must still parse. Only asked for with `provenance`.
+      ...(provenance
+        ? {
+            locator: {
+              type: SchemaType.STRING,
+              nullable: true,
+              description:
+                'Where in the file the evidence sits, copied from the nearest section marker: "Page 7", "Slide 3", "Sheet: Budget". Null when the whole file is the source.',
+            },
+            evidence_kind: {
+              type: SchemaType.STRING,
+              format: 'enum',
+              enum: ['text', 'visual'],
+              nullable: true,
+              description:
+                '"visual" when the evidence is a [bracketed] description of a chart, image or other visual; "text" for running text, tables and notes.',
+            },
+          }
+        : {}),
     },
     required: ['text', 'reasoning', 'confidence'],
   };
 }
 
-export function perFileResponseSchema(): Schema {
+/**
+ * The per-file response schema. `provenance` adds the optional `locator` and
+ * `evidence_kind` to each observation; off (the default) is the schema as it
+ * was before them.
+ */
+export function perFileResponseSchema(opts: { provenance?: boolean } = {}): Schema {
+  const provenance = opts.provenance === true;
   return {
     type: SchemaType.OBJECT,
     properties: {
@@ -69,13 +95,13 @@ export function perFileResponseSchema(): Schema {
         type: SchemaType.ARRAY,
         description:
           'Observations about the account entity. Be liberal — emit any observation that helps a human understand the account from this file. Empty array only when the file is purely administrative or unrelated.',
-        items: observationItemSchema(),
+        items: observationItemSchema(provenance),
       },
       campaign: {
         type: SchemaType.ARRAY,
         description:
           'Observations about the campaign entity. Empty array when there is no campaign in scope or the file is not campaign-relevant.',
-        items: observationItemSchema(),
+        items: observationItemSchema(provenance),
       },
     },
     required: ['deck_type', 'account', 'campaign'],
@@ -124,7 +150,8 @@ function distillationNoteItem(): Schema {
       // confidence above; keep them worded identically if either changes.
       confidence: {
         type: SchemaType.NUMBER,
-        description: '0.0–1.0 — your subjective certainty that this note is accurate and worth recording.',
+        description:
+          '0.0–1.0 — your subjective certainty that this note is accurate and worth recording.',
       },
     },
     required: ['text', 'source_file_ids', 'confidence'],
@@ -283,4 +310,3 @@ export function newEntityResponseSchema(entity: 'account' | 'campaign'): Schema 
     required: ['is_entity', 'reasoning', 'confidence'],
   };
 }
-

@@ -19,7 +19,10 @@
  *                        values.batchGet                 (extractor='gsheet')
  *
  *   Binary:
- *     - application/pdf                     → pdf-parse           (extractor='pdf')
+ *     - application/pdf → unpdf text layer (extractor='pdf'); when the scan
+ *       core asks (ExtractOptions.vision) and DRIVE_VISION_PDF is on, Gemini
+ *       document understanding first (extractor='vision', extract-vision.ts),
+ *       the text layer as its fallback
  *     - application/vnd.openxmlformats-…wordprocessingml.document  → mammoth (.docx)
  *     - text/* (plaintext, markdown, csv, etc.) → direct download (extractor='plaintext')
  *
@@ -38,6 +41,7 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { withDownloadedFile } from './download';
 import { pacedCall } from './pacing';
+import { isVisionPdf } from './vision-gate';
 import { buildBotOAuthClient } from '../workspace';
 import type { ExtractionOutcome, ExtractionSkip, TraversedFile } from './types';
 
@@ -267,7 +271,72 @@ export function predictExtractionSkip(file: TraversedFile): ExtractionSkip | nul
   }
 }
 
-export async function extractText(file: TraversedFile): Promise<ExtractionOutcome> {
+/**
+ * The text layer of a PDF.
+ *
+ * Imported lazily to keep the parser off the module init path.
+ *
+ * `unpdf` is a thin modern wrapper over `pdfjs-dist`'s legacy
+ * build — the build Mozilla maintains specifically for Node /
+ * serverless environments without DOM globals. We deliberately
+ * do NOT use pdf-parse: v1.x is unmaintained (last release
+ * 2019), and v2.x is a rewrite on top of the non-legacy
+ * pdfjs-dist build that expects browser globals (DOMMatrix,
+ * Path2D, ImageData) and throws in Node without `canvas`
+ * native-dep polyfills. unpdf is the actively-maintained
+ * primitive that exists precisely because of v2's breakage.
+ *
+ * We construct the PDFDocumentProxy explicitly (rather than
+ * passing raw bytes to extractText) so we can set pdfjs's
+ * `verbosity` level. Default is WARNINGS, which spams the log
+ * with harmless TrueType-font notes like "TT: undefined
+ * function: 32" — those don't affect text extraction but
+ * drown out real signal. verbosity: 0 = ERRORS only.
+ *
+ * The bytes go in as a VIEW over the download, not as
+ * `new Uint8Array(buf)`, which copies the whole file next to the
+ * original. How the pdf.js bundled in unpdf 1.6.2 treats `data`
+ * (its getDataProp): it throws on a Node Buffer; it uses a
+ * Uint8Array as-is only when it covers its whole ArrayBuffer, and
+ * copies any other view. A large download owns its ArrayBuffer (Node
+ * pools only Buffers under Buffer.poolSize / 2 = 4 KiB), so the view
+ * is used without a copy; a small pooled Buffer is a slice of the
+ * shared pool, which pdf.js copies itself, so it never owns the pool.
+ * pdf.js also TRANSFERS the ArrayBuffer it is given to its worker
+ * side, which detaches `buf`: do not read `buf` after this call.
+ */
+async function readPdfTextLayer(buf: Buffer): Promise<string> {
+  const { getDocumentProxy, extractText } = await import('unpdf');
+  const view = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  const pdf = await getDocumentProxy(view, { verbosity: 0 });
+  // Destroy the document before the reservation is released: pdf.js
+  // keeps the transferred bytes alive until then, which would put the
+  // file's memory outside the budget until the next PDF replaces it.
+  try {
+    const { text } = await extractText(pdf, { mergePages: true });
+    return text;
+  } finally {
+    await pdf.destroy();
+  }
+}
+
+/**
+ * What a caller asks of extractText beyond today's behaviour. Absent, the
+ * result is what it was before vision existed.
+ */
+export interface ExtractOptions {
+  /**
+   * 'pdf': try vision on a PDF that DRIVE_VISION_PDF and its size admit, and
+   * fall back to the text layer (src/drive/extract-vision.ts). Only the scan
+   * core asks; the v1 sync, discovery and the ideas CLI keep the text layer.
+   */
+  vision?: 'pdf';
+}
+
+export async function extractText(
+  file: TraversedFile,
+  opts?: ExtractOptions,
+): Promise<ExtractionOutcome> {
   // Single source of truth for skip-without-I/O decisions.
   const predicted = predictExtractionSkip(file);
   if (predicted) return predicted;
@@ -311,51 +380,56 @@ export async function extractText(file: TraversedFile): Promise<ExtractionOutcom
       //    Each branch downloads and parses inside withDownloadedFile's byte
       //    reservation, sized from effectiveFile.size (a missing size counts as
       //    heavy). `return await`, so a failure still lands in the catch below.
-      case MIME.PDF:
-        return await withDownloadedFile(effectiveFile, async (buf) => {
-          // Import lazily to keep the parser off the module init path.
-          //
-          // `unpdf` is a thin modern wrapper over `pdfjs-dist`'s legacy
-          // build — the build Mozilla maintains specifically for Node /
-          // serverless environments without DOM globals. We deliberately
-          // do NOT use pdf-parse: v1.x is unmaintained (last release
-          // 2019), and v2.x is a rewrite on top of the non-legacy
-          // pdfjs-dist build that expects browser globals (DOMMatrix,
-          // Path2D, ImageData) and throws in Node without `canvas`
-          // native-dep polyfills. unpdf is the actively-maintained
-          // primitive that exists precisely because of v2's breakage.
-          //
-          // We construct the PDFDocumentProxy explicitly (rather than
-          // passing raw bytes to extractText) so we can set pdfjs's
-          // `verbosity` level. Default is WARNINGS, which spams the log
-          // with harmless TrueType-font notes like "TT: undefined
-          // function: 32" — those don't affect text extraction but
-          // drown out real signal. verbosity: 0 = ERRORS only.
-          //
-          // The bytes go in as a VIEW over the download, not as
-          // `new Uint8Array(buf)`, which copies the whole file next to the
-          // original. How the pdf.js bundled in unpdf 1.6.2 treats `data`
-          // (its getDataProp): it throws on a Node Buffer; it uses a
-          // Uint8Array as-is only when it covers its whole ArrayBuffer, and
-          // copies any other view. A large download owns its ArrayBuffer (Node
-          // pools only Buffers under Buffer.poolSize / 2 = 4 KiB), so the view
-          // is used without a copy; a small pooled Buffer is a slice of the
-          // shared pool, which pdf.js copies itself, so it never owns the pool.
-          // pdf.js also TRANSFERS the ArrayBuffer it is given to its worker
-          // side, which detaches `buf`: do not read `buf` after this call.
-          const { getDocumentProxy, extractText } = await import('unpdf');
-          const view = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-          const pdf = await getDocumentProxy(view, { verbosity: 0 });
-          // Destroy the document before the reservation is released: pdf.js
-          // keeps the transferred bytes alive until then, which would put the
-          // file's memory outside the budget until the next PDF replaces it.
+      case MIME.PDF: {
+        if (!(opts?.vision === 'pdf' && isVisionPdf(effectiveFile))) {
+          return await withDownloadedFile(effectiveFile, async (buf) =>
+            ok(await readPdfTextLayer(buf), 'pdf'),
+          );
+        }
+        // Vision, in two steps. Inside the download reservation (the file's
+        // own size, nothing more): the gates, the upload to the staging
+        // bucket, and the text layer, which goes to the model with the pages
+        // and is the fallback. The bytes are not needed after that, so the
+        // reservation is released BEFORE the model call: a long Gemini request
+        // never holds the download budget. Imported lazily: with the flag off
+        // the model client and the storage client are never loaded here.
+        const prep = await withDownloadedFile(effectiveFile, async (buf) => {
+          const { prepareVisionPdf } = await import('./extract-vision');
+          // The upload reads `buf` first: the text layer's reader detaches it.
+          const gate = await prepareVisionPdf(effectiveFile, buf);
+          let layer: string | null = null;
+          let layerError: unknown = null;
           try {
-            const { text } = await extractText(pdf, { mergePages: true });
-            return ok(text, 'pdf');
-          } finally {
-            await pdf.destroy();
+            layer = await readPdfTextLayer(buf);
+          } catch (err) {
+            // A PDF unpdf cannot open may still be one vision can read; the
+            // error is kept and raised only if vision does not answer.
+            layerError = err;
           }
+          return { gate, layer, layerError };
         });
+        let visionFallback: { fallback: string; transient: boolean };
+        if ('prepared' in prep.gate) {
+          const { transcribeStagedPdf } = await import('./extract-vision');
+          const attempt = await transcribeStagedPdf(
+            effectiveFile,
+            prep.gate.prepared,
+            prep.layer ?? '',
+          );
+          if ('text' in attempt) return ok(attempt.text, 'vision');
+          visionFallback = attempt;
+        } else {
+          visionFallback = prep.gate;
+        }
+        if (prep.layer === null) throw prep.layerError;
+        const outcome = ok(prep.layer, 'pdf');
+        if (outcome.kind !== 'ok') return outcome;
+        return {
+          ...outcome,
+          visionFallback: visionFallback.fallback,
+          ...(visionFallback.transient ? { degraded: true } : {}),
+        };
+      }
       case MIME.DOCX:
         return await withDownloadedFile(effectiveFile, async (buf) => {
           const { value } = await mammoth.extractRawText({ buffer: buf });
