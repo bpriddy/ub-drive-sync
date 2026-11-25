@@ -166,7 +166,7 @@ describe('fusion version pin reminder', () => {
     expect(fusionPinReminder({})).toBeNull();
     expect(fusionPinReminder({ STAFF_WORK_BUILD_VERSION: 'fusion-v4' })).toBeNull();
     expect(fusionPinReminder({ STAFF_WORK_BUILD_VERSION: 'fusion-v0' })).toMatch(/fusion-v0/);
-    // the casting pin is retired with experience (D43): it no longer speaks
+    // the casting pin is retired with experience (D44): it no longer speaks
     expect(fusionPinReminder({ CASTING_FUSION_VERSION: 'fusion-v0' })).toBeNull();
   });
 });

@@ -202,7 +202,7 @@ export function checkBeforeApply(
 /**
  * A build version pin that differs from the code's version means serving is empty
  * after an apply. UB serves one `build_version` of the staff work tables
- * (`STAFF_WORK_BUILD_VERSION`, D43); fusion --apply replaces the account's rows
+ * (`STAFF_WORK_BUILD_VERSION`, D44); fusion --apply replaces the account's rows
  * with this code's version.
  */
 export function fusionPinReminder(env: Env): string | null {
